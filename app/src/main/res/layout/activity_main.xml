@@ -1,0 +1,225 @@
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Last War Scanner"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="16dp"/>
+
+    <Button
+        android:id="@+id/btnStartService"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Start Screen Scanning"
+        android:padding="12dp"/>
+
+    <Button
+        android:id="@+id/btnStopService"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Stop Scanning"
+        android:layout_marginTop="8dp"
+        android:visibility="gone"/>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="8dp">
+
+        <Button
+            android:id="@+id/btnExportCsv"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Export CSV"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_marginEnd="4dp"/>
+
+        <Button
+            android:id="@+id/btnClearLogs"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Clear History"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:textColor="#D32F2F"
+            android:layout_marginStart="4dp"/>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="Status: Idle"
+        android:textAlignment="center"
+        android:textStyle="bold"/>
+
+    <ProgressBar
+        android:id="@+id/pbScanning"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="8dp"
+        android:visibility="invisible"
+        android:indeterminate="true"/>
+
+    <TextView
+        android:id="@+id/tvDetectedDay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Active Tab: Unknown"
+        android:textAlignment="center"
+        android:textColor="#1976D2"
+        android:layout_marginTop="4dp"/>
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginTop="16dp">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingBottom="8dp">
+                <TextView
+                    android:id="@+id/headerPlayer"
+                    android:layout_width="150dp"
+                    android:layout_height="wrap_content"
+                    android:text="Member ↑"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?android:attr/selectableItemBackground"/>
+                <TextView
+                    android:id="@+id/headerMon"
+                    android:layout_width="80dp"
+                    android:layout_height="wrap_content"
+                    android:text="Mon"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:textAlignment="center"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?android:attr/selectableItemBackground"/>
+                <TextView
+                    android:id="@+id/headerTues"
+                    android:layout_width="80dp"
+                    android:layout_height="wrap_content"
+                    android:text="Tues"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:textAlignment="center"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?android:attr/selectableItemBackground"/>
+                <TextView
+                    android:id="@+id/headerWed"
+                    android:layout_width="80dp"
+                    android:layout_height="wrap_content"
+                    android:text="Wed"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:textAlignment="center"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?android:attr/selectableItemBackground"/>
+                <TextView
+                    android:id="@+id/headerThur"
+                    android:layout_width="80dp"
+                    android:layout_height="wrap_content"
+                    android:text="Thur"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:textAlignment="center"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?android:attr/selectableItemBackground"/>
+                <TextView
+                    android:id="@+id/headerFri"
+                    android:layout_width="80dp"
+                    android:layout_height="wrap_content"
+                    android:text="Fri"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:textAlignment="center"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?android:attr/selectableItemBackground"/>
+                <TextView
+                    android:id="@+id/headerSat"
+                    android:layout_width="80dp"
+                    android:layout_height="wrap_content"
+                    android:text="Sat"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:textAlignment="center"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?android:attr/selectableItemBackground"/>
+                <TextView
+                    android:id="@+id/headerPower"
+                    android:layout_width="100dp"
+                    android:layout_height="wrap_content"
+                    android:text="Power"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:textAlignment="center"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?android:attr/selectableItemBackground"/>
+                <TextView
+                    android:id="@+id/headerKills"
+                    android:layout_width="100dp"
+                    android:layout_height="wrap_content"
+                    android:text="Kills"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:textAlignment="center"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?android:attr/selectableItemBackground"/>
+                <TextView
+                    android:id="@+id/headerDonation"
+                    android:layout_width="100dp"
+                    android:layout_height="wrap_content"
+                    android:text="Donation"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:textAlignment="center"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?android:attr/selectableItemBackground"/>
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#DDDDDD"
+                android:layout_marginBottom="4dp"/>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvScores"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:scrollbars="vertical"/>
+        </LinearLayout>
+    </HorizontalScrollView>
+
+</LinearLayout>

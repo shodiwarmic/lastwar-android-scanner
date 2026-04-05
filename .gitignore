@@ -1,0 +1,16 @@
+# Android Studio / IntelliJ IDEA
+*.iml
+.gradle
+/local.properties
+.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+
+# Built variants
+/app/build/
+
+# Local configuration
+local.properties
