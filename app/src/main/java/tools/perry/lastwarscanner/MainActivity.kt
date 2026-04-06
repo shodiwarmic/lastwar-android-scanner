@@ -36,9 +36,21 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * Main activity for the Last War Scanner application.
+ * This activity handles the user interface for starting/stopping the screen capture service,
+ * displaying the scanned player scores in a sortable list, and exporting the data to CSV.
+ */
 class MainActivity : AppCompatActivity() {
 
+    /**
+     * Enum representing the columns that can be used for sorting the player list.
+     */
     enum class SortColumn { PLAYER, MON, TUES, WED, THUR, FRI, SAT, POWER, KILLS, DONATION }
+
+    /**
+     * Enum representing the sort direction.
+     */
     enum class SortOrder { ASC, DESC }
 
     private lateinit var tvStatus: TextView
@@ -69,6 +81,10 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var db: AppDatabase
 
+    /**
+     * Receiver for OCR results from the [ScreenCaptureService].
+     * Updates the UI status and progress bar when a scan is received.
+     */
     private val ocrReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val isScanning = intent?.getBooleanExtra(ScreenCaptureService.EXTRA_SCANNING, false) ?: false
@@ -85,6 +101,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Activity result launcher for requesting screen capture permission.
+     * Starts the [ScreenCaptureService] if permission is granted.
+     */
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -104,6 +124,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Initializes the activity, sets up UI components, and starts observing the database.
+     */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -162,12 +185,18 @@ class MainActivity : AppCompatActivity() {
         observeDatabase()
     }
 
+    /**
+     * Configures the RecyclerView and its adapter.
+     */
     private fun setupRecyclerView() {
         adapter = ScoreAdapter()
         rvScores.layoutManager = LinearLayoutManager(this)
         rvScores.adapter = adapter
     }
 
+    /**
+     * Exports the collected player scores to a CSV file and opens a share intent.
+     */
     private fun exportToCsv() {
         lifecycleScope.launch {
             val scores = withContext(Dispatchers.IO) {
@@ -213,6 +242,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Sets up click listeners for the list headers to enable sorting.
+     */
     private fun setupSortHeaders() {
         val clickListener = View.OnClickListener { view ->
             val clickedColumn = when (view.id) {
@@ -252,6 +284,9 @@ class MainActivity : AppCompatActivity() {
         headerDonation.setOnClickListener(clickListener)
     }
 
+    /**
+     * Updates the visual representation of the column headers to reflect the current sort state.
+     */
     private fun updateHeaderUi() {
         val headers = mapOf<SortColumn, Pair<TextView, String>>(
             SortColumn.PLAYER to Pair(headerPlayer, "Member"),
@@ -277,6 +312,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Starts observing the database for player score changes and updates the UI accordingly.
+     * Handles sorting and data transformation.
+     */
     private fun observeDatabase() {
         observationJob?.cancel()
         observationJob = lifecycleScope.launch {
@@ -301,6 +340,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Transforms a list of [PlayerScoreEntity] objects into a grouped list of [MemberRow] objects.
+     * Groups scores by player name and takes the latest score for each day/category.
+     */
     private fun transformToMemberRows(entities: List<PlayerScoreEntity>): List<MemberRow> {
         val grouped = entities.groupBy { it.name.lowercase().trim() }
         return grouped.map { (_, playerEntities) ->
@@ -312,6 +355,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Sorts a list of [MemberRow] objects based on the current sort order and a specific key.
+     */
     private fun sortRowsByKey(rows: List<MemberRow>, key: String): List<MemberRow> {
         return if (currentSortOrder == SortOrder.ASC) {
             rows.sortedBy { it.getScore(key) ?: -1L }
@@ -320,6 +366,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Registers the [ocrReceiver] when the activity is resumed.
+     */
     override fun onResume() {
         super.onResume()
         val filter = IntentFilter(ScreenCaptureService.ACTION_OCR_RESULT)
@@ -331,11 +380,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Unregisters the [ocrReceiver] when the activity is paused.
+     */
     override fun onPause() {
         super.onPause()
         unregisterReceiver(ocrReceiver)
     }
 
+    /**
+     * Updates the UI elements based on whether the scanning service is currently running.
+     * @param isRunning True if the service is running, false otherwise.
+     */
     private fun updateUi(isRunning: Boolean) {
         if (isRunning) {
             tvStatus.text = "Status: Scanning..."

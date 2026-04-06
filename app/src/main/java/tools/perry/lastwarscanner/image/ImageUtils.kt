@@ -5,12 +5,24 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.util.Log
 
+/**
+ * Utility class for image processing tasks, such as color detection and percentage calculation
+ * in specific regions of a bitmap.
+ */
 object ImageUtils {
 
+    /**
+     * Checks if a given RGB color is considered "orange" according to predefined thresholds.
+     * Used for detecting active tabs in certain screen layouts.
+     */
     fun isOrange(r: Int, g: Int, b: Int): Boolean {
         return r > 180 && g in 80..200 && b < 120 && (r > g + 20)
     }
 
+    /**
+     * Checks if a given RGB color is considered "white" according to predefined thresholds.
+     * Used for detecting active tabs in certain screen layouts.
+     */
     fun isWhite(r: Int, g: Int, b: Int): Boolean {
         return r > 215 && g > 215 && b > 215
     }
@@ -48,6 +60,14 @@ object ImageUtils {
         return if (sampledCount == 0) 0f else matchCount.toFloat() / sampledCount
     }
 
+    /**
+     * Checks if a specific region in a bitmap contains a significant amount of a color.
+     * @param bitmap The source bitmap.
+     * @param rect The region to check.
+     * @param threshold The percentage threshold (0.0 to 1.0) to consider the region as "containing" the color.
+     * @param colorCheck The function used to determine if a pixel matches the desired color.
+     * @return True if the percentage of matching pixels meets or exceeds the threshold.
+     */
     fun regionContainsColor(
         bitmap: Bitmap, 
         rect: Rect, 

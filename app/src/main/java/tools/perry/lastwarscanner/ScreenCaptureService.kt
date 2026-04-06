@@ -28,8 +28,14 @@ import tools.perry.lastwarscanner.model.AppDatabase
 import tools.perry.lastwarscanner.model.PlayerScoreEntity
 import tools.perry.lastwarscanner.ocr.OcrParser
 import tools.perry.lastwarscanner.ocr.OcrProcessor
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
+/**
+ * Foreground service that captures the screen content, performs OCR to identify player scores,
+ * and saves the results into the local database.
+ * It uses [MediaProjection] for screen capture and [OcrProcessor] for text extraction.
+ */
 class ScreenCaptureService : Service() {
 
     private var mediaProjection: MediaProjection? = null
@@ -40,7 +46,7 @@ class ScreenCaptureService : Service() {
     private val ocrParser = OcrParser()
     private lateinit var db: AppDatabase
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var isProcessing = false
+    private val isProcessing = AtomicBoolean(false)
 
     private lateinit var windowManager: WindowManager
     private var overlayView: View? = null
@@ -58,12 +64,19 @@ class ScreenCaptureService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Initializes the service and starts it as a foreground service with a notification.
+     */
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         startForegroundService()
     }
 
+    /**
+     * Sets up a transparent overlay view at the top of the screen.
+     * This overlay is used to provide visual feedback (flashing) when a scan is performed.
+     */
     private fun setupOverlay() {
         if (overlayView != null) return
 
@@ -91,9 +104,11 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    /**
+     * Briefly changes the overlay color to provide visual feedback that a screen capture has occurred.
+     */
     private fun flashOverlay() {
         handler.post {
-            // Bright Magenta Flash
             overlayView?.setBackgroundColor(Color.parseColor("#FF00FF"))
             overlayView?.alpha = 0.5f
             handler.postDelayed({ 
@@ -103,6 +118,9 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    /**
+     * Handles service start commands, receiving the screen capture permission result.
+     */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
         val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -123,6 +141,9 @@ class ScreenCaptureService : Service() {
         return START_NOT_STICKY
     }
 
+    /**
+     * Configures the foreground service notification and starts the service in the foreground.
+     */
     private fun startForegroundService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, "Screen Capture Service", NotificationManager.IMPORTANCE_LOW)
@@ -144,6 +165,11 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    /**
+     * Sets up the [MediaProjection] and [VirtualDisplay] for screen capture.
+     * @param resultCode The result code from the screen capture permission request.
+     * @param data The intent data from the screen capture permission request.
+     */
     private fun setupMediaProjection(resultCode: Int, data: Intent) {
         val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         try {
@@ -164,25 +190,33 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    /**
+     * Runnable that periodically triggers a screen capture.
+     */
     private val captureRunnable = object : Runnable {
         override fun run() {
-            if (!isProcessing) {
+            if (!isProcessing.get()) {
                 captureScreen()
             }
             handler.postDelayed(this, 1500)
         }
     }
 
+    /**
+     * Captures the current screen content, converts it to a bitmap, and processes it via OCR.
+     * Identified player scores are matched with existing records and saved to the database.
+     */
     private fun captureScreen() {
         val reader = imageReader ?: return
         val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
         if (image == null) return
 
-        isProcessing = true
+        isProcessing.set(true)
         sendScanningBroadcast(true)
-        flashOverlay() // Trigger the visual flash
+        flashOverlay()
 
         serviceScope.launch(Dispatchers.IO) {
+            var bitmap: Bitmap? = null
             try {
                 val planes = image.planes
                 val buffer = planes[0].buffer
@@ -190,13 +224,13 @@ class ScreenCaptureService : Service() {
                 val rowStride = planes[0].rowStride
                 val rowPadding = rowStride - pixelStride * image.width
 
-                val bitmap = Bitmap.createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
+                bitmap = Bitmap.createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
                 bitmap.copyPixelsFromBuffer(buffer)
                 image.close()
 
                 val inputImage = InputImage.fromBitmap(bitmap, 0)
                 ocrProcessor.process(inputImage, onSuccess = { lines ->
-                    val result = ocrParser.parse(lines)
+                    val result = ocrParser.parse(lines, bitmap.width, bitmap.height)
                     if (result.isConfirmedRankingPage) {
                         var activeDay = "Unknown"
                         val layoutId = result.layout?.id ?: ""
@@ -244,36 +278,50 @@ class ScreenCaptureService : Service() {
                                     }
                                 }
                                 sendResultBroadcast(activeDay, false)
-                                isProcessing = false
+                                isProcessing.set(false)
+                                bitmap.recycle()
                             }
                         } else {
                             sendScanningBroadcast(false)
-                            isProcessing = false
+                            isProcessing.set(false)
+                            bitmap.recycle()
                         }
                     } else {
                         sendScanningBroadcast(false)
-                        isProcessing = false
+                        isProcessing.set(false)
+                        bitmap.recycle()
                     }
                 }, onError = { 
                     Log.e(TAG, "OCR Error: ${it.message}") 
                     sendScanningBroadcast(false)
-                    isProcessing = false
+                    isProcessing.set(false)
+                    bitmap?.recycle()
                 })
             } catch (e: Exception) {
                 Log.e(TAG, "Capture Error: ${e.message}")
-                image.close()
+                try { image.close() } catch (ex: Exception) {}
                 sendScanningBroadcast(false)
-                isProcessing = false
+                isProcessing.set(false)
+                bitmap?.recycle()
             }
         }
     }
 
+    /**
+     * Sends a broadcast intent to notify listeners (e.g., MainActivity) about the scanning status.
+     * @param isScanning True if a scan is currently being processed.
+     */
     private fun sendScanningBroadcast(isScanning: Boolean) {
         val intent = Intent(ACTION_OCR_RESULT)
         intent.putExtra(EXTRA_SCANNING, isScanning)
         sendBroadcast(intent)
     }
 
+    /**
+     * Sends a broadcast intent with the detected active day and scanning status.
+     * @param day The name of the detected active tab/day.
+     * @param isScanning True if a scan is currently being processed.
+     */
     private fun sendResultBroadcast(day: String, isScanning: Boolean) {
         val intent = Intent(ACTION_OCR_RESULT)
         intent.putExtra(EXTRA_DAY, day)
@@ -299,12 +347,17 @@ class ScreenCaptureService : Service() {
         return dp[s1.length][s2.length]
     }
 
+    /**
+     * Cleans up resources, stops media projection, and removes the overlay when the service is destroyed.
+     */
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
         handler.removeCallbacks(captureRunnable)
         virtualDisplay?.release()
         mediaProjection?.stop()
+        imageReader?.close()
+        ocrProcessor.close()
         overlayView?.let { windowManager.removeView(it) }
     }
 }

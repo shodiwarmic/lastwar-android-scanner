@@ -4,8 +4,21 @@ import android.graphics.Rect
 import android.util.Log
 import tools.perry.lastwarscanner.model.PlayerScore
 
+/**
+ * Parser responsible for converting raw OCR lines into structured player score data.
+ * It identifies the screen layout, boundaries, and extracts player names and scores
+ * based on predefined layout rules.
+ */
 class OcrParser {
 
+    /**
+     * Data class representing the result of a parsing operation.
+     * @property layout The detected [ScreenLayout].
+     * @property players The list of [PlayerScore] objects extracted.
+     * @property dayTabs The list of detected day/category tabs and their bounds.
+     * @property pageSignalBounds The bounding box of the text that identified the page.
+     * @property isConfirmedRankingPage True if the page was successfully identified as a valid ranking page.
+     */
     data class ParsedResult(
         val layout: ScreenLayout?,
         val players: List<PlayerScore>,
@@ -14,9 +27,19 @@ class OcrParser {
         val isConfirmedRankingPage: Boolean
     )
 
+    /**
+     * Represents a detected day or category tab on the screen.
+     */
     data class DayTab(val day: String, val bounds: Rect)
 
-    fun parse(lines: List<OcrLine>): ParsedResult {
+    /**
+     * Parses a list of [OcrLine] objects into a [ParsedResult].
+     * @param lines The list of OCR text lines detected on the screen.
+     * @param screenWidth The width of the captured screen.
+     * @param screenHeight The height of the captured screen.
+     * @return A [ParsedResult] containing the extracted information.
+     */
+    fun parse(lines: List<OcrLine>, screenWidth: Int, screenHeight: Int): ParsedResult {
         if (lines.isEmpty()) return ParsedResult(null, emptyList(), emptyList(), null, false)
 
         val allText = lines.joinToString(" ") { it.text }
@@ -37,12 +60,13 @@ class OcrParser {
         val footerRow = lines.find { line ->
             activeLayout.footerSignals.any { signal -> line.text.contains(signal, ignoreCase = true) }
         }
-        val bottomBoundary = footerRow?.top ?: Int.MAX_VALUE
+        val bottomBoundary = footerRow?.top ?: screenHeight
 
         // 3. Identify Tabs (Precise Element Level)
         val detectedTabs = mutableListOf<DayTab>()
+        val tabAreaThreshold = screenHeight * 0.25 // Only look in top 25% of screen
         for (line in lines) {
-            if (line.top > 600) continue
+            if (line.top > tabAreaThreshold) continue
             // Check individual elements (words) for higher precision
             for (element in line.elements) {
                 val text = element.text.replace(".", "").trim()
@@ -54,7 +78,7 @@ class OcrParser {
         }
 
         // 4. Group by row
-        val rowTolerance = 45
+        val rowTolerance = (screenHeight * 0.02).toInt().coerceAtLeast(20) // 2% of screen height
         val rows = mutableMapOf<Int, MutableList<OcrLine>>()
 
         for (line in lines) {
@@ -75,7 +99,11 @@ class OcrParser {
             var score = ""
 
             for (col in activeLayout.columns) {
-                val matchingBlocks = sorted.filter { it.left >= col.minX && it.left <= col.maxX }
+                // Calculate pixel coordinates from relative ratios
+                val minX = (col.minXRatio * screenWidth).toInt()
+                val maxX = (col.maxXRatio * screenWidth).toInt()
+                
+                val matchingBlocks = sorted.filter { it.left >= minX && it.left <= maxX }
                 
                 when (col.type) {
                     ColumnType.NAME -> {

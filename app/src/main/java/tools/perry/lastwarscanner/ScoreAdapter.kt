@@ -10,6 +10,10 @@ import androidx.recyclerview.widget.RecyclerView
 import tools.perry.lastwarscanner.model.MemberRow
 import java.util.*
 
+/**
+ * Adapter for displaying a list of [MemberRow] objects in a RecyclerView.
+ * Uses [ListAdapter] for efficient updates and [MemberDiffCallback] to identify changes.
+ */
 class ScoreAdapter : ListAdapter<MemberRow, ScoreAdapter.MemberViewHolder>(MemberDiffCallback()) {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MemberViewHolder {
@@ -21,6 +25,9 @@ class ScoreAdapter : ListAdapter<MemberRow, ScoreAdapter.MemberViewHolder>(Membe
         holder.bind(getItem(position))
     }
 
+    /**
+     * ViewHolder for displaying a single player's scores across different days and categories.
+     */
     class MemberViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         private val tvName: TextView = view.findViewById(R.id.tvName)
         private val tvMon: TextView = view.findViewById(R.id.tvMon)
@@ -33,6 +40,10 @@ class ScoreAdapter : ListAdapter<MemberRow, ScoreAdapter.MemberViewHolder>(Membe
         private val tvKills: TextView = view.findViewById(R.id.tvKills)
         private val tvDonation: TextView = view.findViewById(R.id.tvDonation)
 
+        /**
+         * Binds a [MemberRow] item to the UI elements in the ViewHolder.
+         * @param item The [MemberRow] object containing the player's data.
+         */
         fun bind(item: MemberRow) {
             tvName.text = item.name
             tvMon.text = formatScore(item.getScore("Mon"))
@@ -46,11 +57,19 @@ class ScoreAdapter : ListAdapter<MemberRow, ScoreAdapter.MemberViewHolder>(Membe
             tvDonation.text = formatScore(item.getScore("Donation"))
         }
 
+        /**
+         * Formats a score as a comma-separated string, or returns "-" if the score is null or zero.
+         * @param score The score value to format.
+         * @return The formatted score string.
+         */
         private fun formatScore(score: Long?): String {
             return if (score == null || score == 0L) "-" else String.format(Locale.US, "%,d", score)
         }
     }
 
+    /**
+     * DiffCallback implementation to allow ListAdapter to calculate differences between lists efficiently.
+     */
     class MemberDiffCallback : DiffUtil.ItemCallback<MemberRow>() {
         override fun areItemsTheSame(oldItem: MemberRow, newItem: MemberRow): Boolean {
             return oldItem.name == newItem.name

@@ -11,8 +11,14 @@ import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import java.io.Closeable
 
-class OcrProcessor {
+/**
+ * Processor responsible for performing OCR on an [InputImage] using Google's ML Kit.
+ * It uses multiple specialized recognizers (Latin, Korean, Chinese, Japanese, Devanagari)
+ * to support various languages found in player names.
+ */
+class OcrProcessor : Closeable {
 
     // Initialize all specialized recognizers
     private val latinRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
@@ -21,6 +27,12 @@ class OcrProcessor {
     private val japaneseRecognizer = TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
     private val devanagariRecognizer = TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
 
+    /**
+     * Processes the given [InputImage] through multiple OCR engines and returns a merged list of [OcrLine]s.
+     * @param image The image to perform OCR on.
+     * @param onSuccess Callback for when OCR is successful.
+     * @param onError Callback for when an error occurs during processing.
+     */
     fun process(
         image: InputImage,
         onSuccess: (List<OcrLine>) -> Unit,
@@ -91,13 +103,30 @@ class OcrProcessor {
         }
         return merged
     }
+
+    /**
+     * Releases the resources used by the various OCR engines.
+     */
+    override fun close() {
+        latinRecognizer.close()
+        koreanRecognizer.close()
+        chineseRecognizer.close()
+        japaneseRecognizer.close()
+        devanagariRecognizer.close()
+    }
 }
 
+/**
+ * Represents a single OCR element (word) with its text and bounding box.
+ */
 data class OcrElement(
     val text: String,
     val boundingBox: Rect
 )
 
+/**
+ * Represents a line of text detected by OCR, containing multiple [OcrElement]s.
+ */
 data class OcrLine(
     val text: String,
     val boundingBox: Rect,
