@@ -63,7 +63,11 @@ class ScoreAdapter : ListAdapter<MemberRow, ScoreAdapter.MemberViewHolder>(Membe
          * @return The formatted score string.
          */
         private fun formatScore(score: Long?): String {
-            return if (score == null || score == 0L) "-" else String.format(Locale.US, "%,d", score)
+            return if (score == null || score == 0L) {
+                itemView.context.getString(R.string.placeholder_dash)
+            } else {
+                String.format(Locale.US, "%,d", score)
+            }
         }
     }
 

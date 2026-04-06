@@ -1,3 +1,36 @@
 <resources>
     <string name="app_name">Last War Scanner</string>
+    <string name="title_app">Last War Scanner</string>
+    <string name="btn_start_scanning">Start Screen Scanning</string>
+    <string name="btn_stop_scanning">Stop Scanning</string>
+    <string name="btn_export_csv">Export CSV</string>
+    <string name="btn_clear_history">Clear History</string>
+    <string name="status_idle">Status: Idle</string>
+    <string name="active_tab_format">Active Tab: %1$s</string>
+    <string name="status_scan_received_format">Status: Scan received at %1$s</string>
+    <string name="status_permission_denied">Status: Permission Denied</string>
+    <string name="overlay_permission_toast">Please grant Overlay Permission for the visual indicator</string>
+    <string name="share_csv_title">Share CSV</string>
+    <string name="header_sort_format">%1$s%2$s</string>
+    <string name="status_scanning">Status: Scanning&#8230;</string>
+    <string name="status_stopped">Status: Stopped</string>
+    <string name="active_tab_unknown">Active Tab: Unknown</string>
+    <string name="error_no_data_export">No data to export</string>
+    <string name="error_export_failed">Export failed: %1$s</string>
+    <string name="csv_header">Member,Mon,Tues,Wed,Thur,Fri,Sat,Power,Kills,Donation</string>
+    <string name="notification_title">Last War Scanner</string>
+    <string name="notification_text">Scanning screen for ranking data&#8230;</string>
+    <string name="notification_channel_name">Screen Capture Service</string>
+    <string name="header_member">Member</string>
+    <string name="header_mon">Mon</string>
+    <string name="header_tues">Tues</string>
+    <string name="header_wed">Wed</string>
+    <string name="header_thur">Thur</string>
+    <string name="header_fri">Fri</string>
+    <string name="header_sat">Sat</string>
+    <string name="header_power">Power</string>
+    <string name="header_kills">Kills</string>
+    <string name="header_donation">Donation</string>
+    <string name="placeholder_member_name">Member Name</string>
+    <string name="placeholder_dash">-</string>
 </resources>

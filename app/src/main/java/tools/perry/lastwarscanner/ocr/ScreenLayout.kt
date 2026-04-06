@@ -1,7 +1,5 @@
 package tools.perry.lastwarscanner.ocr
 
-import android.graphics.Rect
-
 /**
  * Defines the structure and identifiers for a specific screen layout in the game.
  * Used by [OcrParser] to locate and extract relevant information from OCR results.

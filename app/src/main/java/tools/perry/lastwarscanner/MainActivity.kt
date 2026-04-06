@@ -1,12 +1,10 @@
 package tools.perry.lastwarscanner
 
-import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.projection.MediaProjectionManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -19,6 +17,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -94,8 +93,9 @@ class MainActivity : AppCompatActivity() {
                 pbScanning.visibility = if (isScanning) View.VISIBLE else View.INVISIBLE
                 if (day != null) {
                     activeTabName = day
-                    tvDetectedDay.text = "Active Tab: $activeTabName"
-                    tvStatus.text = "Status: Scan received at ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}"
+                    tvDetectedDay.text = getString(R.string.active_tab_format, activeTabName)
+                    val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                    tvStatus.text = getString(R.string.status_scan_received_format, time)
                 }
             }
         }
@@ -108,7 +108,7 @@ class MainActivity : AppCompatActivity() {
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+        if (result.resultCode == RESULT_OK && result.data != null) {
             val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
                 putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
                 putExtra(ScreenCaptureService.EXTRA_DATA, result.data)
@@ -120,7 +120,7 @@ class MainActivity : AppCompatActivity() {
             }
             updateUi(true)
         } else {
-            tvStatus.text = "Status: Permission Denied"
+            tvStatus.text = getString(R.string.status_permission_denied)
         }
     }
 
@@ -155,14 +155,15 @@ class MainActivity : AppCompatActivity() {
 
         setupRecyclerView()
         setupSortHeaders()
+        updateHeaderUi()
 
         btnStart.setOnClickListener {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-                Toast.makeText(this, "Please grant Overlay Permission for the visual indicator", Toast.LENGTH_LONG).show()
+            if (!Settings.canDrawOverlays(this)) {
+                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, "package:$packageName".toUri())
+                Toast.makeText(this, R.string.overlay_permission_toast, Toast.LENGTH_LONG).show()
                 startActivity(intent)
             } else {
-                val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                val mpManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 screenCaptureLauncher.launch(mpManager.createScreenCaptureIntent())
             }
         }
@@ -203,12 +204,12 @@ class MainActivity : AppCompatActivity() {
                 db.playerScoreDao().getAllScores().first()
             }
             if (scores.isEmpty()) {
-                Toast.makeText(this@MainActivity, "No data to export", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, R.string.error_no_data_export, Toast.LENGTH_SHORT).show()
                 return@launch
             }
 
             val memberRows = withContext(Dispatchers.Default) { transformToMemberRows(scores) }
-            val csvHeader = "Member,Mon,Tues,Wed,Thur,Fri,Sat,Power,Kills,Donation\n"
+            val csvHeader = getString(R.string.csv_header) + "\n"
             val csvBody = memberRows.joinToString("\n") { row ->
                 listOf(
                     row.name,
@@ -235,9 +236,9 @@ class MainActivity : AppCompatActivity() {
                     putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-                startActivity(Intent.createChooser(intent, "Share CSV"))
+                startActivity(Intent.createChooser(intent, getString(R.string.share_csv_title)))
             } catch (e: Exception) {
-                Toast.makeText(this@MainActivity, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, getString(R.string.error_export_failed, e.localizedMessage ?: e.message), Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -289,23 +290,23 @@ class MainActivity : AppCompatActivity() {
      */
     private fun updateHeaderUi() {
         val headers = mapOf<SortColumn, Pair<TextView, String>>(
-            SortColumn.PLAYER to Pair(headerPlayer, "Member"),
-            SortColumn.MON to Pair(headerMon, "Mon"),
-            SortColumn.TUES to Pair(headerTues, "Tues"),
-            SortColumn.WED to Pair(headerWed, "Wed"),
-            SortColumn.THUR to Pair(headerThur, "Thur"),
-            SortColumn.FRI to Pair(headerFri, "Fri"),
-            SortColumn.SAT to Pair(headerSat, "Sat"),
-            SortColumn.POWER to Pair(headerPower, "Power"),
-            SortColumn.KILLS to Pair(headerKills, "Kills"),
-            SortColumn.DONATION to Pair(headerDonation, "Donation")
+            SortColumn.PLAYER to Pair(headerPlayer, getString(R.string.header_member)),
+            SortColumn.MON to Pair(headerMon, getString(R.string.header_mon)),
+            SortColumn.TUES to Pair(headerTues, getString(R.string.header_tues)),
+            SortColumn.WED to Pair(headerWed, getString(R.string.header_wed)),
+            SortColumn.THUR to Pair(headerThur, getString(R.string.header_thur)),
+            SortColumn.FRI to Pair(headerFri, getString(R.string.header_fri)),
+            SortColumn.SAT to Pair(headerSat, getString(R.string.header_sat)),
+            SortColumn.POWER to Pair(headerPower, getString(R.string.header_power)),
+            SortColumn.KILLS to Pair(headerKills, getString(R.string.header_kills)),
+            SortColumn.DONATION to Pair(headerDonation, getString(R.string.header_donation))
         )
 
         headers.forEach { (col, pair) ->
             val (view, baseText) = pair
             if (col == currentSortColumn) {
                 val arrow = if (currentSortOrder == SortOrder.ASC) " ↑" else " ↓"
-                view.text = baseText + arrow
+                view.text = getString(R.string.header_sort_format, baseText, arrow)
             } else {
                 view.text = baseText
             }
@@ -373,7 +374,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         val filter = IntentFilter(ScreenCaptureService.ACTION_OCR_RESULT)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(ocrReceiver, filter, Context.RECEIVER_EXPORTED)
+            registerReceiver(ocrReceiver, filter, RECEIVER_EXPORTED)
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(ocrReceiver, filter)
@@ -394,12 +395,12 @@ class MainActivity : AppCompatActivity() {
      */
     private fun updateUi(isRunning: Boolean) {
         if (isRunning) {
-            tvStatus.text = "Status: Scanning..."
+            tvStatus.text = getString(R.string.status_scanning)
             btnStart.isEnabled = false
             btnStop.visibility = View.VISIBLE
         } else {
-            tvStatus.text = "Status: Stopped"
-            tvDetectedDay.text = "Active Tab: Unknown"
+            tvStatus.text = getString(R.string.status_stopped)
+            tvDetectedDay.text = getString(R.string.active_tab_unknown)
             pbScanning.visibility = View.INVISIBLE
             btnStart.isEnabled = true
             btnStop.visibility = View.GONE

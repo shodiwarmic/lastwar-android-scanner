@@ -3,7 +3,7 @@ package tools.perry.lastwarscanner.image
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Rect
-import android.util.Log
+import androidx.core.graphics.get
 
 /**
  * Utility class for image processing tasks, such as color detection and percentage calculation
@@ -49,7 +49,7 @@ object ImageUtils {
         
         for (x in left until right step step) {
             for (y in top until bottom step step) {
-                val pixel = bitmap.getPixel(x, y)
+                val pixel = bitmap[x, y]
                 if (colorCheck(Color.red(pixel), Color.green(pixel), Color.blue(pixel))) {
                     matchCount++
                 }
@@ -58,22 +58,5 @@ object ImageUtils {
         }
 
         return if (sampledCount == 0) 0f else matchCount.toFloat() / sampledCount
-    }
-
-    /**
-     * Checks if a specific region in a bitmap contains a significant amount of a color.
-     * @param bitmap The source bitmap.
-     * @param rect The region to check.
-     * @param threshold The percentage threshold (0.0 to 1.0) to consider the region as "containing" the color.
-     * @param colorCheck The function used to determine if a pixel matches the desired color.
-     * @return True if the percentage of matching pixels meets or exceeds the threshold.
-     */
-    fun regionContainsColor(
-        bitmap: Bitmap, 
-        rect: Rect, 
-        threshold: Float = 0.15f,
-        colorCheck: (Int, Int, Int) -> Boolean
-    ): Boolean {
-        return getColorPercentage(bitmap, rect, colorCheck) >= threshold
     }
 }

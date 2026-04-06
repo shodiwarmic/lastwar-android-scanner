@@ -1,8 +1,8 @@
 package tools.perry.lastwarscanner.ocr
 
 import android.graphics.Rect
-import android.util.Log
 import tools.perry.lastwarscanner.model.PlayerScore
+import kotlin.math.abs
 
 /**
  * Parser responsible for converting raw OCR lines into structured player score data.
@@ -85,7 +85,7 @@ class OcrParser {
             if (line.top < topBoundary || line.bottom > bottomBoundary) continue
             val cleanText = line.text.trim()
             if (cleanText.startsWith("[") || cleanText.endsWith("]")) continue
-            val existingKey = rows.keys.find { Math.abs(it - line.top) < rowTolerance }
+            val existingKey = rows.keys.find { abs(it - line.top) < rowTolerance }
             val key = existingKey ?: line.top
             rows.getOrPut(key) { mutableListOf() }.add(line)
         }

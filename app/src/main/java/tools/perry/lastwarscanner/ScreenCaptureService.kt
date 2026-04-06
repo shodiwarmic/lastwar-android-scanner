@@ -1,7 +1,10 @@
 package tools.perry.lastwarscanner
 
-import android.app.*
-import android.content.Context
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.app.Activity.RESULT_CANCELED
+import android.app.Activity.RESULT_OK
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
@@ -21,6 +24,8 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.createBitmap
 import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.*
 import tools.perry.lastwarscanner.image.ImageUtils
@@ -69,7 +74,7 @@ class ScreenCaptureService : Service() {
      */
     override fun onCreate() {
         super.onCreate()
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         startForegroundService()
     }
 
@@ -109,11 +114,9 @@ class ScreenCaptureService : Service() {
      */
     private fun flashOverlay() {
         handler.post {
-            overlayView?.setBackgroundColor(Color.parseColor("#FF00FF"))
-            overlayView?.alpha = 0.5f
+            overlayView?.setBackgroundColor(ContextCompat.getColor(this, R.color.flash_overlay))
             handler.postDelayed({ 
                 overlayView?.setBackgroundColor(Color.TRANSPARENT)
-                overlayView?.alpha = 1.0f
             }, 150)
         }
     }
@@ -122,7 +125,7 @@ class ScreenCaptureService : Service() {
      * Handles service start commands, receiving the screen capture permission result.
      */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
+        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, RESULT_CANCELED) ?: RESULT_CANCELED
         val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent?.getParcelableExtra(EXTRA_DATA, Intent::class.java)
         } else {
@@ -130,7 +133,7 @@ class ScreenCaptureService : Service() {
             intent?.getParcelableExtra(EXTRA_DATA)
         }
 
-        if (resultCode == Activity.RESULT_OK && data != null) {
+        if (resultCode == RESULT_OK && data != null) {
             db = AppDatabase.getDatabase(this)
             setupOverlay()
             handler.postDelayed({ setupMediaProjection(resultCode, data) }, 100)
@@ -146,14 +149,18 @@ class ScreenCaptureService : Service() {
      */
     private fun startForegroundService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Screen Capture Service", NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.notification_channel_name),
+                NotificationManager.IMPORTANCE_LOW
+            )
             val manager = getSystemService(NotificationManager::class.java) as NotificationManager
             manager.createNotificationChannel(channel)
         }
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Last War Scanner")
-            .setContentText("Scanning screen for ranking data...")
+            .setContentTitle(getString(R.string.notification_title))
+            .setContentText(getString(R.string.notification_text))
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -171,7 +178,7 @@ class ScreenCaptureService : Service() {
      * @param data The intent data from the screen capture permission request.
      */
     private fun setupMediaProjection(resultCode: Int, data: Intent) {
-        val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val mpManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         try {
             mediaProjection = mpManager.getMediaProjection(resultCode, data)
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
@@ -185,7 +192,7 @@ class ScreenCaptureService : Service() {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader?.surface, null, handler
             )
             handler.postDelayed(captureRunnable, 1000)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             stopSelf()
         }
     }
@@ -208,7 +215,7 @@ class ScreenCaptureService : Service() {
      */
     private fun captureScreen() {
         val reader = imageReader ?: return
-        val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
+        val image = try { reader.acquireLatestImage() } catch (_: Exception) { null }
         if (image == null) return
 
         isProcessing.set(true)
@@ -224,7 +231,7 @@ class ScreenCaptureService : Service() {
                 val rowStride = planes[0].rowStride
                 val rowPadding = rowStride - pixelStride * image.width
 
-                bitmap = Bitmap.createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
+                bitmap = createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
                 bitmap.copyPixelsFromBuffer(buffer)
                 image.close()
 
@@ -277,7 +284,7 @@ class ScreenCaptureService : Service() {
                                         ))
                                     }
                                 }
-                                sendResultBroadcast(activeDay, false)
+                                sendResultBroadcast(activeDay)
                                 isProcessing.set(false)
                                 bitmap.recycle()
                             }
@@ -291,15 +298,15 @@ class ScreenCaptureService : Service() {
                         isProcessing.set(false)
                         bitmap.recycle()
                     }
-                }, onError = { 
-                    Log.e(TAG, "OCR Error: ${it.message}") 
+                }, onError = { exception -> 
+                    Log.e(TAG, "OCR Error: ${exception.message}")
                     sendScanningBroadcast(false)
                     isProcessing.set(false)
-                    bitmap?.recycle()
+                    bitmap.recycle()
                 })
             } catch (e: Exception) {
                 Log.e(TAG, "Capture Error: ${e.message}")
-                try { image.close() } catch (ex: Exception) {}
+                try { image.close() } catch (_: Exception) {}
                 sendScanningBroadcast(false)
                 isProcessing.set(false)
                 bitmap?.recycle()
@@ -320,12 +327,11 @@ class ScreenCaptureService : Service() {
     /**
      * Sends a broadcast intent with the detected active day and scanning status.
      * @param day The name of the detected active tab/day.
-     * @param isScanning True if a scan is currently being processed.
      */
-    private fun sendResultBroadcast(day: String, isScanning: Boolean) {
+    private fun sendResultBroadcast(day: String) {
         val intent = Intent(ACTION_OCR_RESULT)
         intent.putExtra(EXTRA_DAY, day)
-        intent.putExtra(EXTRA_SCANNING, isScanning)
+        intent.putExtra(EXTRA_SCANNING, false)
         sendBroadcast(intent)
     }
 

@@ -1,7 +1,6 @@
 package tools.perry.lastwarscanner.ocr
 
 import android.graphics.Rect
-import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
@@ -12,6 +11,8 @@ import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.Closeable
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Processor responsible for performing OCR on an [InputImage] using Google's ML Kit.
@@ -88,8 +89,8 @@ class OcrProcessor : Closeable {
         for (line in sortedLines) {
             val isDuplicate = merged.any { existing ->
                 // Check if bounding boxes overlap significantly
-                val overlapX = Math.max(0, Math.min(line.right, existing.right) - Math.max(line.left, existing.left))
-                val overlapY = Math.max(0, Math.min(line.bottom, existing.bottom) - Math.max(line.top, existing.top))
+                val overlapX = max(0, min(line.right, existing.right) - max(line.left, existing.left))
+                val overlapY = max(0, min(line.bottom, existing.bottom) - max(line.top, existing.top))
                 val overlapArea = overlapX * overlapY
                 val lineArea = (line.right - line.left) * (line.bottom - line.top)
                 

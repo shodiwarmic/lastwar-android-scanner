@@ -10,9 +10,9 @@
         android:id="@+id/tvName"
         android:layout_width="150dp"
         android:layout_height="wrap_content"
-        android:text="Member Name"
+        android:text="@string/placeholder_member_name"
         android:textStyle="bold"
-        android:textColor="#000000"
+        android:textColor="@color/black"
         android:ellipsize="end"
         android:maxLines="1" />
 
@@ -20,7 +20,7 @@
         android:id="@+id/tvMon"
         android:layout_width="80dp"
         android:layout_height="wrap_content"
-        android:text="-"
+        android:text="@string/placeholder_dash"
         android:textAlignment="center"
         android:textSize="12sp" />
 
@@ -28,7 +28,7 @@
         android:id="@+id/tvTues"
         android:layout_width="80dp"
         android:layout_height="wrap_content"
-        android:text="-"
+        android:text="@string/placeholder_dash"
         android:textAlignment="center"
         android:textSize="12sp" />
 
@@ -36,7 +36,7 @@
         android:id="@+id/tvWed"
         android:layout_width="80dp"
         android:layout_height="wrap_content"
-        android:text="-"
+        android:text="@string/placeholder_dash"
         android:textAlignment="center"
         android:textSize="12sp" />
 
@@ -44,7 +44,7 @@
         android:id="@+id/tvThur"
         android:layout_width="80dp"
         android:layout_height="wrap_content"
-        android:text="-"
+        android:text="@string/placeholder_dash"
         android:textAlignment="center"
         android:textSize="12sp" />
 
@@ -52,7 +52,7 @@
         android:id="@+id/tvFri"
         android:layout_width="80dp"
         android:layout_height="wrap_content"
-        android:text="-"
+        android:text="@string/placeholder_dash"
         android:textAlignment="center"
         android:textSize="12sp" />
 
@@ -60,7 +60,7 @@
         android:id="@+id/tvSat"
         android:layout_width="80dp"
         android:layout_height="wrap_content"
-        android:text="-"
+        android:text="@string/placeholder_dash"
         android:textAlignment="center"
         android:textSize="12sp" />
 
@@ -68,7 +68,7 @@
         android:id="@+id/tvPower"
         android:layout_width="100dp"
         android:layout_height="wrap_content"
-        android:text="-"
+        android:text="@string/placeholder_dash"
         android:textAlignment="center"
         android:textSize="12sp"
         android:textStyle="bold" />
@@ -77,7 +77,7 @@
         android:id="@+id/tvKills"
         android:layout_width="100dp"
         android:layout_height="wrap_content"
-        android:text="-"
+        android:text="@string/placeholder_dash"
         android:textAlignment="center"
         android:textSize="12sp"
         android:textStyle="bold" />
@@ -86,7 +86,7 @@
         android:id="@+id/tvDonation"
         android:layout_width="100dp"
         android:layout_height="wrap_content"
-        android:text="-"
+        android:text="@string/placeholder_dash"
         android:textAlignment="center"
         android:textSize="12sp"
         android:textStyle="bold" />
