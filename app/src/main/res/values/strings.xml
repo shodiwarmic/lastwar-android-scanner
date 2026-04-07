@@ -77,4 +77,5 @@
     <string name="review_skip_member">Skip / Do Not Import</string>
     <string name="review_picker_title">Assign member for:\n%1$s</string>
     <string name="review_picker_search_hint">Search members\u2026</string>
+    <string name="arrow_right">→</string>
 </resources>
