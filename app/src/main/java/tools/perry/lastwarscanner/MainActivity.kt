@@ -30,6 +30,9 @@ import kotlinx.coroutines.withContext
 import tools.perry.lastwarscanner.model.AppDatabase
 import tools.perry.lastwarscanner.model.MemberRow
 import tools.perry.lastwarscanner.model.PlayerScoreEntity
+import tools.perry.lastwarscanner.network.SessionManager
+import tools.perry.lastwarscanner.sync.ServerSetupActivity
+import tools.perry.lastwarscanner.sync.SyncActivity
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -59,6 +62,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStop: Button
     private lateinit var btnClear: Button
     private lateinit var btnExport: Button
+    private lateinit var btnSync: Button
     private lateinit var rvScores: RecyclerView
     private lateinit var adapter: ScoreAdapter
 
@@ -79,6 +83,7 @@ class MainActivity : AppCompatActivity() {
     private var observationJob: Job? = null
 
     private lateinit var db: AppDatabase
+    private lateinit var sessionManager: SessionManager
 
     /**
      * Receiver for OCR results from the [ScreenCaptureService].
@@ -96,6 +101,9 @@ class MainActivity : AppCompatActivity() {
                     tvDetectedDay.text = getString(R.string.active_tab_format, activeTabName)
                     val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                     tvStatus.text = getString(R.string.status_scan_received_format, time)
+                    // Persist for SyncActivity day pre-selection
+                    getSharedPreferences(SyncActivity.SYNC_PREFS, MODE_PRIVATE)
+                        .edit().putString(SyncActivity.KEY_LAST_ACTIVE_DAY, day).apply()
                 }
             }
         }
@@ -132,6 +140,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         db = AppDatabase.getDatabase(this)
+        sessionManager = SessionManager(this)
 
         tvStatus = findViewById(R.id.tvStatus)
         tvDetectedDay = findViewById(R.id.tvDetectedDay)
@@ -140,6 +149,7 @@ class MainActivity : AppCompatActivity() {
         btnStop = findViewById(R.id.btnStopService)
         btnClear = findViewById(R.id.btnClearLogs)
         btnExport = findViewById(R.id.btnExportCsv)
+        btnSync = findViewById(R.id.btnSyncToServer)
         rvScores = findViewById(R.id.rvScores)
 
         headerPlayer = findViewById(R.id.headerPlayer)
@@ -182,6 +192,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnExport.setOnClickListener { exportToCsv() }
+
+        btnSync.setOnClickListener {
+            val target = if (sessionManager.isLoggedIn()) SyncActivity::class.java
+                         else ServerSetupActivity::class.java
+            startActivity(Intent(this, target))
+        }
 
         observeDatabase()
     }

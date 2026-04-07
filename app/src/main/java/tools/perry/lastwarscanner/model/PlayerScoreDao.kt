@@ -53,4 +53,17 @@ interface PlayerScoreDao {
      */
     @Query("SELECT DISTINCT name FROM player_scores")
     fun getAllKnownNames(): List<String>
+
+    /**
+     * Returns one row per player for the given day, taking the highest score observed.
+     * Used by [tools.perry.lastwarscanner.sync.SyncViewModel.startPreview] to build
+     * the sync payload.
+     */
+    @Query("""
+        SELECT id, name, MAX(score) as score, day, timestamp FROM player_scores
+        WHERE day = :day
+        GROUP BY name
+        ORDER BY name ASC
+    """)
+    fun getLatestScoresForDay(day: String): List<PlayerScoreEntity>
 }
