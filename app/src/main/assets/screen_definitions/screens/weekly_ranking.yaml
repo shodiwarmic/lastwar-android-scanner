@@ -1,0 +1,59 @@
+id: weekly_ranking
+version: 1
+name: Weekly Ranking
+description: >
+  Alliance VS points leaderboard showing the 7-day cumulative total.
+  No day sub-tabs — output category is always "weekly".
+
+identification:
+  page_signals:
+    - "Weekly Rank"
+    - "Weekly Ranking"
+  negative_signals: ["Mon.", "Tues.", "Wed.", "Thur.", "Fri.", "Sat."]
+  pre_ocr_hint:
+    x_hint: 0.65
+    y_hint: 0.15
+    color:
+      named: orange
+      hsv_override: {h_min: 0.014, h_max: 0.153, s_min: 0.40, v_min: 0.55}
+    confidence: 0.88
+
+boundaries:
+  header:
+    signals: ["Commander", "Points"]
+    search_region: {y_min: 0.0, y_max: 0.40}
+    anchor_offset: {type: below_bottom_edge, offset_fraction: 0.0}
+  footer:
+    signals: ["Your Alliance"]
+    search_region: {y_min: 0.60, y_max: 1.0}
+    anchor_offset: {type: above_top_edge, offset_fraction: 0.0}
+
+chrome:
+  top_fraction: 0.18
+  bottom_fraction: 0.12
+
+tabs:
+  search_region: {y_min: 0.00, y_max: 0.25}
+  y_hint: 0.15
+  active_indicator:
+    strategy: color_fraction
+    min_fraction: 0.10
+    color:
+      named: orange
+      hsv_override: {h_min: 0.014, h_max: 0.153, s_min: 0.40, v_min: 0.55}
+    bbox_padding_fraction: 0.007
+  items:
+    - {id: weekly, category: weekly, signals: ["Weekly", "Weekly Rank"], x_hint: 0.65}
+
+columns:
+  - {id: rank,  type: ignore, x_min: 0.00, x_max: 0.15}
+  - {id: name,  type: name,   x_min: 0.15, x_max: 0.60}
+  - {id: score, type: score,  x_min: 0.60, x_max: 1.00}
+
+row_clustering:
+  strategy: score_anchored
+  score_anchored: {up_band_fraction: 0.021, down_band_fraction: 0.002}
+  y_proximity: {tolerance_fraction: 0.02, min_tolerance_px: 20}
+  min_score: 1000
+  word_gap_fraction: 0.015
+  min_word_gap_px: 8

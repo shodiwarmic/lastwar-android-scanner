@@ -59,4 +59,7 @@ dependencies {
     ksp(libs.androidx.room.compiler)
 
     implementation("androidx.security:security-crypto:1.1.0")
+
+    // YAML parsing for screen definitions
+    implementation("org.yaml:snakeyaml:2.2")
 }
