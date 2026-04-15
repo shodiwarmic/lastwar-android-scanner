@@ -136,8 +136,13 @@ class OcrParser {
                             .trim()
                     }
                     ColumnType.SCORE -> {
-                        score = matchingBlocks.joinToString("") { it.text }
-                            .replace(Regex("[^0-9]"), "")
+                        // Each recognizer may produce a duplicate detection for the same number.
+                        // Concatenating them causes values like "1448634" + "14486434" = "144863414486434".
+                        // Take the longest numeric string from any single block instead.
+                        score = matchingBlocks
+                            .map { it.text.replace(Regex("[^0-9]"), "") }
+                            .filter { it.isNotEmpty() }
+                            .maxByOrNull { it.length } ?: ""
                     }
                     ColumnType.IGNORE -> {}
                 }
