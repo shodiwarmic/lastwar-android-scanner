@@ -279,12 +279,15 @@ class ScreenCaptureService : Service() {
                                     }
 
                                     val nameChanged = latest != null && player.name.length < latest.name.length && latest.name.contains(player.name)
+                                    val finalName = if (nameChanged) player.name else (latest?.name ?: player.name)
+
+                                    // Always save/refresh the crop so the review screen has a
+                                    // current image even when the score hasn't changed.
+                                    val snapshotPath = player.rowBounds?.let { bounds ->
+                                        saveRowCrop(bitmap, bounds, finalName, activeDay)
+                                    }
 
                                     if (latest == null || latest.score != scoreLong || nameChanged) {
-                                        val finalName = if (nameChanged) player.name else (latest?.name ?: player.name)
-                                        val snapshotPath = player.rowBounds?.let { bounds ->
-                                            saveRowCrop(bitmap, bounds, finalName, activeDay)
-                                        }
                                         db.playerScoreDao().insert(PlayerScoreEntity(
                                             name = finalName,
                                             score = scoreLong,
@@ -292,6 +295,9 @@ class ScreenCaptureService : Service() {
                                             timestamp = System.currentTimeMillis(),
                                             rowSnapshotPath = snapshotPath
                                         ))
+                                    } else if (snapshotPath != null) {
+                                        // Score unchanged — just refresh the snapshot path.
+                                        db.playerScoreDao().updateSnapshotPath(finalName, activeDay, snapshotPath)
                                     }
                                 }
                                 sendResultBroadcast(activeDay)
