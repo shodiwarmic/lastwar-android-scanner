@@ -7,7 +7,7 @@ import kotlin.math.abs
 /**
  * Parser responsible for converting raw OCR lines into structured player score data.
  * It identifies the screen layout, boundaries, and extracts player names and scores
- * based on predefined layout rules.
+ * based on the provided layout definitions.
  */
 class OcrParser {
 
@@ -34,19 +34,29 @@ class OcrParser {
 
     /**
      * Parses a list of [OcrLine] objects into a [ParsedResult].
+     *
      * @param lines The list of OCR text lines detected on the screen.
      * @param screenWidth The width of the captured screen.
      * @param screenHeight The height of the captured screen.
-     * @return A [ParsedResult] containing the extracted information.
+     * @param layouts The ordered list of screen layouts to match against. Layouts are tested
+     *   in list order so higher-priority layouts should come first. Falls back to
+     *   [LayoutRegistry.ALL_LAYOUTS] if an empty list is supplied.
      */
-    fun parse(lines: List<OcrLine>, screenWidth: Int, screenHeight: Int): ParsedResult {
+    fun parse(
+        lines: List<OcrLine>,
+        screenWidth: Int,
+        screenHeight: Int,
+        layouts: List<ScreenLayout> = LayoutRegistry.ALL_LAYOUTS
+    ): ParsedResult {
         if (lines.isEmpty()) return ParsedResult(null, emptyList(), emptyList(), null, false)
 
+        val effectiveLayouts = layouts.ifEmpty { LayoutRegistry.ALL_LAYOUTS }
         val allText = lines.joinToString(" ") { it.text }
-        
-        // 1. Identify layout with specific page signals
-        val activeLayout = LayoutRegistry.ALL_LAYOUTS.find { layout ->
-            layout.pageSignals.any { signal -> allText.contains(signal, ignoreCase = true) }
+
+        // 1. Identify layout: all page_signals must be present, no negative_signals
+        val activeLayout = effectiveLayouts.find { layout ->
+            layout.pageSignals.any { signal -> allText.contains(signal, ignoreCase = true) } &&
+            layout.negativeSignals.none { signal -> allText.contains(signal, ignoreCase = true) }
         }
 
         if (activeLayout == null) return ParsedResult(null, emptyList(), emptyList(), null, false)
@@ -62,23 +72,36 @@ class OcrParser {
         }
         val bottomBoundary = footerRow?.top ?: screenHeight
 
-        // 3. Identify Tabs (Precise Element Level)
+        // 3. Identify tabs
         val detectedTabs = mutableListOf<DayTab>()
-        val tabAreaThreshold = screenHeight * 0.25 // Only look in top 25% of screen
+        val tabAreaThreshold = screenHeight * 0.25
         for (line in lines) {
             if (line.top > tabAreaThreshold) continue
-            // Check individual elements (words) for higher precision
             for (element in line.elements) {
                 val text = element.text.replace(".", "").trim()
-                val matchedTab = activeLayout.tabSignals.find { it.equals(text, ignoreCase = true) }
-                if (matchedTab != null) {
-                    detectedTabs.add(DayTab(matchedTab, element.boundingBox))
+                if (activeLayout.tabItems.isNotEmpty()) {
+                    for (tabItem in activeLayout.tabItems) {
+                        val matched = tabItem.signals.any { sig ->
+                            sig.replace(".", "").trim().equals(text, ignoreCase = true)
+                        }
+                        if (matched) {
+                            // Use the first signal as the stored day key for DB compatibility
+                            detectedTabs.add(DayTab(tabItem.signals[0], element.boundingBox))
+                            break
+                        }
+                    }
+                } else {
+                    // Fallback for layouts without tabItems (e.g. LayoutRegistry hardcoded layouts)
+                    val matchedTab = activeLayout.tabSignals.find { it.equals(text, ignoreCase = true) }
+                    if (matchedTab != null) {
+                        detectedTabs.add(DayTab(matchedTab, element.boundingBox))
+                    }
                 }
             }
         }
 
-        // 4. Group by row
-        val rowTolerance = (screenHeight * 0.02).toInt().coerceAtLeast(20) // 2% of screen height
+        // 4. Group OCR lines into rows by vertical proximity
+        val rowTolerance = (screenHeight * 0.02).toInt().coerceAtLeast(20)
         val rows = mutableMapOf<Int, MutableList<OcrLine>>()
 
         for (line in lines) {
@@ -91,25 +114,21 @@ class OcrParser {
         }
 
         val players = mutableListOf<PlayerScore>()
-        val sortedRows = rows.toSortedMap()
 
-        for ((_, rowLines) in sortedRows) {
+        for ((_, rowLines) in rows.toSortedMap()) {
             val sorted = rowLines.sortedBy { it.left }
             var name = ""
             var score = ""
 
             for (col in activeLayout.columns) {
-                // Calculate pixel coordinates from relative ratios
                 val minX = (col.minXRatio * screenWidth).toInt()
                 val maxX = (col.maxXRatio * screenWidth).toInt()
-                
                 val matchingBlocks = sorted.filter { it.left >= minX && it.left <= maxX }
-                
+
                 when (col.type) {
                     ColumnType.NAME -> {
-                        val fullRowText = matchingBlocks.joinToString(" ") { it.text }
-                        name = fullRowText
-                            .replace(Regex("^\\d+\\s+"), "") 
+                        name = matchingBlocks.joinToString(" ") { it.text }
+                            .replace(Regex("^\\d+\\s+"), "")
                             .replace(Regex("\\b[Rr][1-5]\\b"), "")
                             .replace(Regex("^\\d+"), "")
                             .replace(Regex("^[^\\w\\s]+"), "")
@@ -117,8 +136,8 @@ class OcrParser {
                             .trim()
                     }
                     ColumnType.SCORE -> {
-                        val rawScore = matchingBlocks.joinToString("") { it.text }
-                        score = rawScore.replace(Regex("[^0-9]"), "")
+                        score = matchingBlocks.joinToString("") { it.text }
+                            .replace(Regex("[^0-9]"), "")
                     }
                     ColumnType.IGNORE -> {}
                 }

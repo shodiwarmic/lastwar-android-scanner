@@ -33,6 +33,8 @@ import tools.perry.lastwarscanner.model.AppDatabase
 import tools.perry.lastwarscanner.model.PlayerScoreEntity
 import tools.perry.lastwarscanner.ocr.OcrParser
 import tools.perry.lastwarscanner.ocr.OcrProcessor
+import tools.perry.lastwarscanner.ocr.ScreenDefinitionLoader
+import tools.perry.lastwarscanner.ocr.ScreenLayout
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
@@ -50,6 +52,7 @@ class ScreenCaptureService : Service() {
     private val ocrProcessor = OcrProcessor()
     private val ocrParser = OcrParser()
     private lateinit var db: AppDatabase
+    private var screenLayouts: List<ScreenLayout> = emptyList()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val isProcessing = AtomicBoolean(false)
 
@@ -135,6 +138,7 @@ class ScreenCaptureService : Service() {
 
         if (resultCode == RESULT_OK && data != null) {
             db = AppDatabase.getDatabase(this)
+            screenLayouts = ScreenDefinitionLoader.loadAll(this)
             setupOverlay()
             handler.postDelayed({ setupMediaProjection(resultCode, data) }, 100)
         } else {
@@ -237,14 +241,14 @@ class ScreenCaptureService : Service() {
 
                 val inputImage = InputImage.fromBitmap(bitmap, 0)
                 ocrProcessor.process(inputImage, onSuccess = { lines ->
-                    val result = ocrParser.parse(lines, bitmap.width, bitmap.height)
+                    val result = ocrParser.parse(lines, bitmap.width, bitmap.height, screenLayouts)
                     if (result.isConfirmedRankingPage) {
                         var activeDay = "Unknown"
-                        val layoutId = result.layout?.id ?: ""
+                        val useOrange = result.layout?.tabIndicatorStrategy == "color_fraction"
 
                         val candidates = mutableListOf<Pair<String, Float>>()
                         for (tab in result.dayTabs) {
-                            val pct = if (layoutId == "strength_ranking") {
+                            val pct = if (useOrange) {
                                 ImageUtils.getColorPercentage(bitmap, tab.bounds) { r, g, b -> ImageUtils.isOrange(r, g, b) }
                             } else {
                                 ImageUtils.getColorPercentage(bitmap, tab.bounds) { r, g, b -> ImageUtils.isWhite(r, g, b) }
