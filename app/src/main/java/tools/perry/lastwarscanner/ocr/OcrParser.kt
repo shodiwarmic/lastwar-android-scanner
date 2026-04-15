@@ -38,23 +38,24 @@ class OcrParser {
      * @param lines The list of OCR text lines detected on the screen.
      * @param screenWidth The width of the captured screen.
      * @param screenHeight The height of the captured screen.
-     * @param layouts The ordered list of screen layouts to match against. Layouts are tested
-     *   in list order so higher-priority layouts should come first. Falls back to
-     *   [LayoutRegistry.ALL_LAYOUTS] if an empty list is supplied.
+     * @param layouts The ordered list of screen layouts to match against, loaded from the
+     *   YAML screen definitions via [ScreenDefinitionLoader]. Layouts are tested in list order
+     *   so higher-priority layouts (lower priority number in catalog) should come first.
      */
     fun parse(
         lines: List<OcrLine>,
         screenWidth: Int,
         screenHeight: Int,
-        layouts: List<ScreenLayout> = LayoutRegistry.ALL_LAYOUTS
+        layouts: List<ScreenLayout>
     ): ParsedResult {
-        if (lines.isEmpty()) return ParsedResult(null, emptyList(), emptyList(), null, false)
+        if (lines.isEmpty() || layouts.isEmpty()) {
+            return ParsedResult(null, emptyList(), emptyList(), null, false)
+        }
 
-        val effectiveLayouts = layouts.ifEmpty { LayoutRegistry.ALL_LAYOUTS }
         val allText = lines.joinToString(" ") { it.text }
 
-        // 1. Identify layout: all page_signals must be present, no negative_signals
-        val activeLayout = effectiveLayouts.find { layout ->
+        // 1. Identify layout: at least one page_signal present, no negative_signals present
+        val activeLayout = layouts.find { layout ->
             layout.pageSignals.any { signal -> allText.contains(signal, ignoreCase = true) } &&
             layout.negativeSignals.none { signal -> allText.contains(signal, ignoreCase = true) }
         }
@@ -90,8 +91,7 @@ class OcrParser {
                             break
                         }
                     }
-                } else {
-                    // Fallback for layouts without tabItems (e.g. LayoutRegistry hardcoded layouts)
+                } else if (activeLayout.tabSignals.isNotEmpty()) {
                     val matchedTab = activeLayout.tabSignals.find { it.equals(text, ignoreCase = true) }
                     if (matchedTab != null) {
                         detectedTabs.add(DayTab(matchedTab, element.boundingBox))
