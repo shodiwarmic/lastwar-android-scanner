@@ -194,7 +194,7 @@ class SyncActivity : AppCompatActivity() {
                             state.preview.totalMatched,
                             state.preview.totalUnresolved
                         )
-                        reviewAdapter.setData(state.preview)
+                        reviewAdapter.setData(state.preview, state.snapshotPaths)
 
                         // Reflect any manual resolutions already in state
                         for ((name, memberId) in state.resolutions) {

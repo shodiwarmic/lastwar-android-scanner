@@ -1,11 +1,14 @@
 package tools.perry.lastwarscanner.sync
 
+import android.graphics.BitmapFactory
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import java.io.File
 import tools.perry.lastwarscanner.R
 import tools.perry.lastwarscanner.network.AliasMapping
 import tools.perry.lastwarscanner.network.MemberSummary
@@ -40,10 +43,12 @@ class ReviewAdapter(
     }
 
     private val items = mutableListOf<Item>()
+    private var snapshotPaths: Map<String, String?> = emptyMap()
 
     // ── Public API ────────────────────────────────────────────────────────────
 
-    fun setData(preview: PreviewResponse) {
+    fun setData(preview: PreviewResponse, snapshotPaths: Map<String, String?> = emptyMap()) {
+        this.snapshotPaths = snapshotPaths
         items.clear()
         if (preview.matched.isNotEmpty()) {
             items += Item.Header("Matched (${preview.matched.size})")
@@ -128,6 +133,7 @@ class ReviewAdapter(
     }
 
     inner class UnresolvedVH(view: View) : RecyclerView.ViewHolder(view) {
+        private val ivSnapshot: ImageView = view.findViewById(R.id.ivRowSnapshot)
         private val tvName: TextView = view.findViewById(R.id.tvUnresolvedName)
         private val tvScore: TextView = view.findViewById(R.id.tvUnresolvedScore)
         private val tvPickButton: TextView = view.findViewById(R.id.tvPickMember)
@@ -136,6 +142,22 @@ class ReviewAdapter(
         internal fun bind(item: Item.Unresolved) {
             tvName.text = item.match.originalName
             tvScore.text = item.match.score.toString()
+
+            // Show row snapshot if available
+            val path = snapshotPaths[item.match.originalName]
+            if (path != null && File(path).exists()) {
+                val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
+                val bmp = BitmapFactory.decodeFile(path, opts)
+                if (bmp != null) {
+                    ivSnapshot.setImageBitmap(bmp)
+                    ivSnapshot.visibility = View.VISIBLE
+                } else {
+                    ivSnapshot.visibility = View.GONE
+                }
+            } else {
+                ivSnapshot.setImageBitmap(null)
+                ivSnapshot.visibility = View.GONE
+            }
 
             if (item.selectedMemberId != null) {
                 tvPickButton.text = item.selectedMemberName

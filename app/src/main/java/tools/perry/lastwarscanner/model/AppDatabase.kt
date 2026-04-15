@@ -9,7 +9,7 @@ import androidx.room.RoomDatabase
  * Main database class for the application, providing access to the [PlayerScoreDao].
  * Uses Room for persistent storage.
  */
-@Database(entities = [PlayerScoreEntity::class], version = 2, exportSchema = false)
+@Database(entities = [PlayerScoreEntity::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     /**
      * Returns the DAO for player score operations.

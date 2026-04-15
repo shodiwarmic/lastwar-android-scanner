@@ -14,7 +14,8 @@ class OcrParser {
     /**
      * Data class representing the result of a parsing operation.
      * @property layout The detected [ScreenLayout].
-     * @property players The list of [PlayerScore] objects extracted.
+     * @property players The list of [PlayerScore] objects extracted, each carrying its
+     *   [PlayerScore.rowBounds] bounding box for snapshot cropping.
      * @property dayTabs The list of detected day/category tabs and their bounds.
      * @property pageSignalBounds The bounding box of the text that identified the page.
      * @property isConfirmedRankingPage True if the page was successfully identified as a valid ranking page.
@@ -62,16 +63,21 @@ class OcrParser {
 
         if (activeLayout == null) return ParsedResult(null, emptyList(), emptyList(), null, false)
 
-        // 2. Find boundaries
+        // 2. Find data boundaries.
+        //    If OCR misses the header/footer signal, fall back to chrome fractions so footer
+        //    content (e.g. "Your Alliance / [Tag] AllianceName") is never included as player rows.
+        val chromeTopY = (screenHeight * activeLayout.chromeTopFraction).toInt()
+        val chromeBotY = (screenHeight * (1f - activeLayout.chromeBottomFraction)).toInt()
+
         val headerRow = lines.find { line ->
             activeLayout.headerSignals.any { signal -> line.text.contains(signal, ignoreCase = true) }
         }
-        val topBoundary = headerRow?.bottom ?: 0
+        val topBoundary = headerRow?.bottom ?: chromeTopY
 
         val footerRow = lines.find { line ->
             activeLayout.footerSignals.any { signal -> line.text.contains(signal, ignoreCase = true) }
         }
-        val bottomBoundary = footerRow?.top ?: screenHeight
+        val bottomBoundary = footerRow?.top ?: chromeBotY
 
         // 3. Identify tabs
         val detectedTabs = mutableListOf<DayTab>()
@@ -149,7 +155,12 @@ class OcrParser {
             }
 
             if (name.isNotEmpty() && score.isNotEmpty()) {
-                players.add(PlayerScore(name, score))
+                // Compute the full-row bounding box (rank → score) from all OCR lines in the row.
+                val rowBounds = rowLines.fold(null as Rect?) { acc, line ->
+                    if (acc == null) Rect(line.left, line.top, line.right, line.bottom)
+                    else acc.also { it.union(line.boundingBox) }
+                }
+                players.add(PlayerScore(name, score, rowBounds = rowBounds))
             }
         }
 

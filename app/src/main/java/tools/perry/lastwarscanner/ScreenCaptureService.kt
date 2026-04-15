@@ -35,6 +35,8 @@ import tools.perry.lastwarscanner.ocr.OcrParser
 import tools.perry.lastwarscanner.ocr.OcrProcessor
 import tools.perry.lastwarscanner.ocr.ScreenDefinitionLoader
 import tools.perry.lastwarscanner.ocr.ScreenLayout
+import android.graphics.Rect
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
@@ -277,14 +279,18 @@ class ScreenCaptureService : Service() {
                                     }
 
                                     val nameChanged = latest != null && player.name.length < latest.name.length && latest.name.contains(player.name)
-                                    
+
                                     if (latest == null || latest.score != scoreLong || nameChanged) {
                                         val finalName = if (nameChanged) player.name else (latest?.name ?: player.name)
+                                        val snapshotPath = player.rowBounds?.let { bounds ->
+                                            saveRowCrop(bitmap, bounds, finalName, activeDay)
+                                        }
                                         db.playerScoreDao().insert(PlayerScoreEntity(
                                             name = finalName,
                                             score = scoreLong,
                                             day = activeDay,
-                                            timestamp = System.currentTimeMillis()
+                                            timestamp = System.currentTimeMillis(),
+                                            rowSnapshotPath = snapshotPath
                                         ))
                                     }
                                 }
@@ -355,6 +361,37 @@ class ScreenCaptureService : Service() {
             }
         }
         return dp[s1.length][s2.length]
+    }
+
+    /**
+     * Crops a player row from the captured bitmap and saves it as a JPEG in internal storage.
+     * Files are written to [filesDir]/row_crops/ with a deterministic name (sanitized player
+     * name + day), so repeated scans of the same player+day overwrite the previous crop.
+     *
+     * @return Absolute path of the saved file, or null if saving failed.
+     */
+    private fun saveRowCrop(bitmap: Bitmap, bounds: Rect, name: String, day: String): String? {
+        return try {
+            val padding = 8
+            val left   = (bounds.left   - padding).coerceIn(0, bitmap.width)
+            val top    = (bounds.top    - padding).coerceIn(0, bitmap.height)
+            val right  = (bounds.right  + padding).coerceIn(0, bitmap.width)
+            val bottom = (bounds.bottom + padding).coerceIn(0, bitmap.height)
+            val w = right - left
+            val h = bottom - top
+            if (w <= 0 || h <= 0) return null
+
+            val crop = Bitmap.createBitmap(bitmap, left, top, w, h)
+            val dir = File(filesDir, "row_crops").also { it.mkdirs() }
+            val safeName = name.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(48)
+            val file = File(dir, "${safeName}_${day}.jpg")
+            file.outputStream().use { crop.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+            crop.recycle()
+            file.absolutePath
+        } catch (e: Exception) {
+            Log.e(TAG, "saveRowCrop failed: ${e.message}")
+            null
+        }
     }
 
     /**
