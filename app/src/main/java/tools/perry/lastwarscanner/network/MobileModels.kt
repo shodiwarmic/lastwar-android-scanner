@@ -106,8 +106,8 @@ object Category {
 
 object DayMapping {
     /**
-     * Maps the display names used by OcrParser / LayoutRegistry to the backend
-     * category strings expected by /api/mobile/preview and /api/mobile/commit.
+     * Maps the display names used by OcrParser to the backend category strings
+     * expected by /api/mobile/preview and /api/mobile/commit.
      */
     val toBackendKey: Map<String, String> = mapOf(
         "Mon"   to "monday",

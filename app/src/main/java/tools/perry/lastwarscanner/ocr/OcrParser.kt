@@ -49,6 +49,34 @@ class OcrParser {
     data class DayTab(val day: String, val bounds: Rect, val group: String = "")
 
     /**
+     * True iff every space-separated word in [signal] (lowercased) appears as a
+     * token in [tokens]. Mirrors the OCR service's classifier helper and the
+     * canonical algorithm in lastwar-screen-definitions/README.md (Consumer
+     * Contract → Pipeline stages → Screen identification). A bare `contains`
+     * substring match would falsely fire on adjacent OCR noise (e.g. "STRENGTH"
+     * appearing in any token would match the whole signal).
+     */
+    private fun signalMatches(signal: String, tokens: Set<String>): Boolean {
+        val words = signal.lowercase()
+            .split(Regex("[^a-z0-9]+"))
+            .filter { it.isNotEmpty() }
+        return words.isNotEmpty() && words.all { it in tokens }
+    }
+
+    /**
+     * Compact per-layout decision summary used by the layout-decision INFO log
+     * line. Format: `id:result(matched_pos|matched_neg)` where `result` is one
+     * of `match`/`no_pos`/`negged`.
+     */
+    private fun layoutDecisionTrace(layout: ScreenLayout, tokens: Set<String>): String {
+        val firedNeg = layout.negativeSignals.firstOrNull { signalMatches(it, tokens) }
+        if (firedNeg != null) return "${layout.id}:negged($firedNeg)"
+        val matchedPos = layout.pageSignals.firstOrNull { signalMatches(it, tokens) }
+        return if (matchedPos != null) "${layout.id}:match($matchedPos)"
+               else "${layout.id}:no_pos"
+    }
+
+    /**
      * Parses a list of [OcrLine] objects into a [ParsedResult].
      *
      * @param lines The list of OCR text lines detected on the screen.
@@ -68,15 +96,32 @@ class OcrParser {
             return ParsedResult(null, emptyList(), emptyList(), null, false)
         }
 
-        val allText = lines.joinToString(" ") { it.text }
+        // Tokenise OCR output once: lowercase, split on non-alphanumeric. This matches the
+        // OCR service's signal-matching algorithm (classifier.py:_ocr_detect_strength) and
+        // the canonical algorithm in lastwar-screen-definitions/README.md ("page_signals
+        // match if every space-separated word appears anywhere in the OCR text").
+        val ocrTokens: Set<String> = lines
+            .flatMap { it.text.lowercase().split(Regex("[^a-z0-9]+")) }
+            .filter { it.isNotEmpty() }
+            .toSet()
 
-        // 1. Identify layout: at least one page_signal present, no negative_signals present
+        // 1. Identify layout: at least one page_signal whose words are ALL present, AND
+        //    no negative_signal whose words are all present.
         val activeLayout = layouts.find { layout ->
-            layout.pageSignals.any { signal -> allText.contains(signal, ignoreCase = true) } &&
-            layout.negativeSignals.none { signal -> allText.contains(signal, ignoreCase = true) }
+            val hasAnyPageSignal = layout.pageSignals.any { signalMatches(it, ocrTokens) }
+            val hasAnyNegative   = layout.negativeSignals.any { signalMatches(it, ocrTokens) }
+            hasAnyPageSignal && !hasAnyNegative
         }
 
-        if (activeLayout == null) return ParsedResult(null, emptyList(), emptyList(), null, false)
+        // Layout-decision telemetry (one line per frame, INFO level so logcat -s OcrParser:I
+        // captures it without --log-level changes). Records every layout's match outcome so
+        // future misclassifications can be diagnosed without a screenshot.
+        if (activeLayout == null) {
+            android.util.Log.i(TAG, "layout=NONE reasons=" + layouts.joinToString(",") { layoutDecisionTrace(it, ocrTokens) })
+            return ParsedResult(null, emptyList(), emptyList(), null, false)
+        } else {
+            android.util.Log.i(TAG, "layout=${activeLayout.id} reasons=" + layouts.joinToString(",") { layoutDecisionTrace(it, ocrTokens) })
+        }
 
         // 2. Find data boundaries.
         //    If OCR misses the header/footer signal, fall back to chrome fractions so footer
