@@ -180,6 +180,11 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, R.string.overlay_permission_toast, Toast.LENGTH_LONG).show()
                 startActivity(intent)
             } else {
+                // Refresh the roster (and aliases) in the background at the start of each
+                // scan session so RosterAliasResolver sees newly-added aliases without the
+                // user having to tap the manual refresh button. Per-frame would be wasteful;
+                // per-session is the right granularity.
+                if (sessionManager.isLoggedIn()) refreshRosterInBackground()
                 val mpManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 screenCaptureLauncher.launch(mpManager.createScreenCaptureIntent())
             }
@@ -355,6 +360,30 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.btn_refresh_roster_empty)
     }
 
+    /**
+     * Silent variant of [refreshRoster] used at scan-session start. Fetches the
+     * roster + aliases in the background and persists to [RosterCache]; failures
+     * are logged but not surfaced as toasts so they don't interrupt the user's
+     * scan flow. The cached roster from the previous session keeps working when
+     * the network is unavailable.
+     */
+    private fun refreshRosterInBackground() {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                AllianceApiClient(sessionManager).getMembers()
+            }
+            result.fold(
+                onSuccess = { members ->
+                    RosterCache.save(this@MainActivity, members)
+                    updateRosterButton()
+                },
+                onFailure = { e ->
+                    android.util.Log.w("MainActivity", "Background roster refresh failed: ${e.message}")
+                }
+            )
+        }
+    }
+
     /** Fetches the member roster from the web API and saves it to [RosterCache]. */
     private fun refreshRoster() {
         btnRefreshRoster.isEnabled = false
@@ -365,10 +394,9 @@ class MainActivity : AppCompatActivity() {
             }
             result.fold(
                 onSuccess = { members ->
-                    val names = members.map { it.name }
-                    RosterCache.save(this@MainActivity, names)
+                    RosterCache.save(this@MainActivity, members)
                     updateRosterButton()
-                    Toast.makeText(this@MainActivity, getString(R.string.roster_refresh_success, names.size), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, getString(R.string.roster_refresh_success, members.size), Toast.LENGTH_SHORT).show()
                 },
                 onFailure = { e ->
                     updateRosterButton()

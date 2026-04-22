@@ -49,15 +49,7 @@ class AllianceApiClient(private val session: SessionManager) {
         withContext(Dispatchers.IO) {
             runCatching {
                 val arr = getJsonArray(endpoint("/api/mobile/members"))
-                List(arr.length()) { i ->
-                    arr.getJSONObject(i).run {
-                        MemberSummary(
-                            id = getInt("id"),
-                            name = getString("name"),
-                            rank = optString("rank", "")
-                        )
-                    }
-                }
+                List(arr.length()) { i -> parseMember(arr.getJSONObject(i)) }
             }
         }
 
@@ -123,13 +115,21 @@ class AllianceApiClient(private val session: SessionManager) {
 
     // ── JSON parsing helpers ──────────────────────────────────────────────────
 
-    private fun parsePreviewResponse(json: JSONObject): PreviewResponse {
-        fun parseMember(obj: JSONObject) = MemberSummary(
+    private fun parseMember(obj: JSONObject): MemberSummary {
+        val aliasesArr = obj.optJSONArray("aliases") ?: JSONArray()
+        val aliases = List(aliasesArr.length()) { i ->
+            val a = aliasesArr.getJSONObject(i)
+            AliasEntry(alias = a.getString("alias"), category = a.optString("category", ""))
+        }
+        return MemberSummary(
             id = obj.getInt("id"),
             name = obj.getString("name"),
-            rank = obj.optString("rank", "")
+            rank = obj.optString("rank", ""),
+            aliases = aliases
         )
+    }
 
+    private fun parsePreviewResponse(json: JSONObject): PreviewResponse {
         fun parseMatch(obj: JSONObject): PreviewMatch {
             val memberObj = if (!obj.isNull("matched_member")) obj.optJSONObject("matched_member") else null
             return PreviewMatch(

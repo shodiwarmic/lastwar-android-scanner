@@ -335,17 +335,19 @@ class ScreenCaptureService : Service() {
                                 // both fail (e.g. OCR noise variant of a known name, or the
                                 // player's score changed since the last scan).
                                 val knownNames = db.playerScoreDao().getAllKnownNames()
-                                // Web roster: canonical member names fetched manually by the user.
-                                // Lookup 4 normalises OCR names to server-side spellings before
-                                // a new DB entry is created.
-                                val rosterNames = RosterCache.getNames(applicationContext)
+                                // Web roster: members and aliases scoped to the current user
+                                // (see lastwar-screen-definitions/README.md, "Name resolution").
+                                // Lookup 4 runs the alias-priority match first and only falls
+                                // back to fuzzy name matching when no alias resolves.
+                                val rosterMembers = RosterCache.getMembers(applicationContext)
+                                val rosterNames = rosterMembers.map { it.name }
 
                                 for (player in result.players) {
                                     // Resolve crash-token ambiguity: if the row had multiple
                                     // valid name/score splits, find the one that best matches
-                                    // an existing DB record before committing.
+                                    // an existing DB record (or a roster alias) before committing.
                                     val resolvedPlayer = if (player.candidates.size > 1) {
-                                        resolveCrashCandidate(player, knownNames) ?: player
+                                        resolveCrashCandidate(player, knownNames, rosterMembers) ?: player
                                     } else player
 
                                     val scoreLong = resolvedPlayer.score.toLongOrNull() ?: continue
@@ -383,9 +385,22 @@ class ScreenCaptureService : Service() {
                                         }
                                     }
 
-                                    // Lookup 4: fuzzy match against the web roster — normalises
-                                    // the name to the canonical server-side spelling even before
-                                    // this player has appeared in a previous local scan.
+                                    // Lookup 4: web-roster alias resolver — mirrors the backend's
+                                    // resolveMemberAlias hierarchy (Exact → Personal → Global → OCR).
+                                    // This runs BEFORE fuzzy so a known alias always wins over a
+                                    // typo-distance heuristic.
+                                    if (latest == null && rosterMembers.isNotEmpty()) {
+                                        val aliasMatch = tools.perry.lastwarscanner.ocr.RosterAliasResolver
+                                            .resolve(resolvedPlayer.name, rosterMembers)
+                                        if (aliasMatch != null) {
+                                            latest = db.playerScoreDao().getLatestPlayerEntry(aliasMatch.member.name)
+                                            canonicalName = aliasMatch.member.name
+                                            Log.d(TAG, "  alias match: \"${resolvedPlayer.name}\" → \"${canonicalName}\" (${aliasMatch.matchType})")
+                                        }
+                                    }
+
+                                    // Lookup 5: fuzzy match against the web roster — last-chance
+                                    // OCR-noise fallback for names that aren't an exact alias hit.
                                     if (latest == null && rosterNames.isNotEmpty()) {
                                         val match = rosterNames.find { isSimilar(resolvedPlayer.name, it) }
                                         if (match != null) {
@@ -485,7 +500,8 @@ class ScreenCaptureService : Service() {
      */
     private suspend fun resolveCrashCandidate(
         player: tools.perry.lastwarscanner.model.PlayerScore,
-        knownNames: List<String>
+        knownNames: List<String>,
+        rosterMembers: List<tools.perry.lastwarscanner.network.MemberSummary>
     ): tools.perry.lastwarscanner.model.PlayerScore? {
         // Step 1: exact name match
         for (candidate in player.candidates) {
@@ -509,6 +525,17 @@ class ScreenCaptureService : Service() {
             val match = knownNames.find { isSimilar(candidate.name, it) }
             if (match != null) {
                 return player.copy(name = match, score = candidate.score, candidates = emptyList())
+            }
+        }
+        // Step 4: web-roster alias resolver. Mirrors the backend's resolveOCRPlayer
+        // walk over candidates × resolveMemberAlias (Exact → Personal → Global → OCR).
+        if (rosterMembers.isNotEmpty()) {
+            val pairs = player.candidates.map { it.name to it.score }
+            val matched = tools.perry.lastwarscanner.ocr.RosterAliasResolver
+                .resolveCandidates(pairs, rosterMembers)
+            if (matched != null) {
+                val (m, chosen) = matched
+                return player.copy(name = m.member.name, score = chosen.second, candidates = emptyList())
             }
         }
         return null

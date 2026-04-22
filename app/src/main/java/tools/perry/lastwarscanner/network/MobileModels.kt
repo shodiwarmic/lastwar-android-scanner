@@ -40,7 +40,33 @@ data class LoginResponse(
     val manageMembers: Boolean
 )
 
-data class MemberSummary(val id: Int, val name: String, val rank: String)
+/**
+ * One alias the current user is allowed to see for a member.
+ *
+ * [category] is one of `"personal"` (only the current user), `"global"`
+ * (every user), or `"ocr"` (every user; created by accepting an OCR-side
+ * suggestion). The backend filters out other users' personal aliases
+ * before the roster reaches the device — see `loadMobileRoster` in the
+ * alliance-manager.
+ */
+data class AliasEntry(val alias: String, val category: String)
+
+/**
+ * One member of the alliance roster as served by `/api/mobile/members`.
+ *
+ * [aliases] carries the rows the current user is permitted to see
+ * (their own personals + every global + every OCR alias). The scanner's
+ * RosterAliasResolver runs the same Exact → Personal → Global → OCR
+ * lookup the backend does in `resolveMemberAlias` so on-device
+ * disambiguation matches server-side behaviour. See the Consumer
+ * Contract section of lastwar-screen-definitions/README.md.
+ */
+data class MemberSummary(
+    val id: Int,
+    val name: String,
+    val rank: String,
+    val aliases: List<AliasEntry> = emptyList()
+)
 
 data class PreviewMatch(
     val originalName: String,
