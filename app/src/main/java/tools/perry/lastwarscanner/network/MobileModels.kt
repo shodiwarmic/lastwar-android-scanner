@@ -93,8 +93,19 @@ object DayMapping {
         "Power" to "power"
     )
 
-    /** Categories present locally that have no mobile API commit path. */
-    val skipped: Set<String> = setOf("Kills", "Donation")
+    /** Categories stored locally that have no mobile API commit path. Includes both
+     *  current YAML-style keys and legacy display-name keys for backwards compatibility. */
+    val skipped: Set<String> = setOf(
+        // Legacy keys
+        "Kills", "Donation",
+        // Current YAML category keys
+        "kills", "donation_daily", "donation_weekly",
+        "weekly",
+        "mutual_assistance_daily", "mutual_assistance_weekly", "mutual_assistance_season",
+        "siege_daily", "siege_weekly", "siege_season",
+        "rare_soil_war_daily", "rare_soil_war_weekly", "rare_soil_war_season",
+        "defeat_daily", "defeat_weekly", "defeat_season",
+    )
 
     /** Ordered list of display names shown in the day selector spinner. */
     val syncableDisplayNames: List<String> = listOf("Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Power")

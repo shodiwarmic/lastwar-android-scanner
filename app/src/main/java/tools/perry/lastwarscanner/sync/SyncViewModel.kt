@@ -70,7 +70,11 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val (entries, snapshotPaths) = withContext(Dispatchers.IO) {
-                val dbRows = db.playerScoreDao().getLatestScoresForDay(day)
+                // The DB stores entries using the backend category key (e.g. "wednesday").
+                // Fall back to the legacy display key (e.g. "Wed") for any data that was
+                // scanned before the YAML category IDs were adopted.
+                val dbRows = db.playerScoreDao().getLatestScoresForDay(category)
+                    .ifEmpty { db.playerScoreDao().getLatestScoresForDay(day) }
                     .filter { it.day !in DayMapping.skipped }
                 val scanEntries = dbRows.map { ScanEntry(name = it.name, score = it.score, category = category) }
                 val paths = dbRows.associate { it.name to it.rowSnapshotPath }

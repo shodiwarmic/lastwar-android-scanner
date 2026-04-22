@@ -75,20 +75,43 @@ object ScreenDefinitionLoader {
         val preOcrHint      = (ident["pre_ocr_hint"] as? Map<String, Any>)?.let { parsePreOcrHint(it) }
 
         val boundaries   = raw["boundaries"] as? Map<String, Any> ?: emptyMap()
-        val headerSignals = ((boundaries["header"] as? Map<String, Any>)
-            ?.get("signals") as? List<String>) ?: emptyList()
-        val footerSignals = ((boundaries["footer"] as? Map<String, Any>)
-            ?.get("signals") as? List<String>) ?: emptyList()
+        val headerBounds  = boundaries["header"] as? Map<String, Any>
+        val footerBounds  = boundaries["footer"] as? Map<String, Any>
+        val headerSignals = (headerBounds?.get("signals") as? List<String>) ?: emptyList()
+        val footerSignals = (footerBounds?.get("signals") as? List<String>) ?: emptyList()
+        val headerSearchRegion = headerBounds?.get("search_region") as? Map<String, Any>
+        val headerSearchYMin   = (headerSearchRegion?.get("y_min") as? Number)?.toFloat() ?: 0.0f
+        val headerSearchYMax   = (headerSearchRegion?.get("y_max") as? Number)?.toFloat() ?: 0.40f
+        val footerSearchRegion = footerBounds?.get("search_region") as? Map<String, Any>
+        val footerSearchYMin   = (footerSearchRegion?.get("y_min") as? Number)?.toFloat() ?: 0.60f
+        val footerSearchYMax   = (footerSearchRegion?.get("y_max") as? Number)?.toFloat() ?: 1.0f
 
         val chromeRaw          = raw["chrome"] as? Map<String, Any>
         val chromeTopFraction  = (chromeRaw?.get("top_fraction")    as? Number)?.toFloat() ?: 0.22f
         val chromeBotFraction  = (chromeRaw?.get("bottom_fraction") as? Number)?.toFloat() ?: 0.12f
 
-        val tabsRaw            = raw["tabs"] as? Map<String, Any>
-        val tabItems           = parseTabItems(tabsRaw)
-        val tabYHint           = (tabsRaw?.get("y_hint") as? Number)?.toFloat() ?: 0.20f
-        val tabIndicatorStrategy = ((tabsRaw?.get("active_indicator") as? Map<String, Any>)
-            ?.get("strategy") as? String) ?: "brightest"
+        val tabsRaw              = raw["tabs"] as? Map<String, Any>
+        val tabItems             = parseTabItems(tabsRaw)
+        val tabGroupConfigs      = parseTabGroupConfigs(tabsRaw)
+        val tabYHint             = (tabsRaw?.get("y_hint") as? Number)?.toFloat() ?: 0.20f
+        val tabSearchRegion      = tabsRaw?.get("search_region") as? Map<String, Any>
+        val tabSearchRegionYMin  = (tabSearchRegion?.get("y_min") as? Number)?.toFloat() ?: 0.0f
+        val tabSearchRegionYMax  = (tabSearchRegion?.get("y_max") as? Number)?.toFloat() ?: 0.25f
+        val tabIndicator         = tabsRaw?.get("active_indicator") as? Map<String, Any>
+        val tabIndicatorStrategy = (tabIndicator?.get("strategy") as? String) ?: "brightest"
+        val tabIndicatorMinFraction          = (tabIndicator?.get("min_fraction")          as? Number)?.toFloat() ?: 0.10f
+        val tabIndicatorMinGap               = (tabIndicator?.get("min_gap")               as? Number)?.toFloat() ?: 0.04f
+        val tabIndicatorBboxPaddingFraction  = (tabIndicator?.get("bbox_padding_fraction") as? Number)?.toFloat() ?: 0.007f
+        val tabIndicatorColorRaw = tabIndicator?.get("color") as? Map<String, Any>
+        val tabIndicatorHsvRaw   = tabIndicatorColorRaw?.get("hsv_override") as? Map<String, Any>
+        val tabIndicatorHsvColor = tabIndicatorHsvRaw?.let {
+            HsvColorConfig(
+                hMin = (it["h_min"] as? Number)?.toFloat() ?: 0.014f,
+                hMax = (it["h_max"] as? Number)?.toFloat() ?: 0.153f,
+                sMin = (it["s_min"] as? Number)?.toFloat() ?: 0.40f,
+                vMin = (it["v_min"] as? Number)?.toFloat() ?: 0.55f,
+            )
+        }
         // Flat list of all signal strings, used for legacy text-based tab matching
         val tabSignals = tabItems.flatMap { it.signals }.distinct()
 
@@ -108,31 +131,45 @@ object ScreenDefinitionLoader {
 
         val rcRaw       = raw["row_clustering"] as? Map<String, Any>
         val saRaw       = rcRaw?.get("score_anchored") as? Map<String, Any>
+        val ypRaw       = rcRaw?.get("y_proximity")    as? Map<String, Any>
         val rowCluster  = RowClusteringConfig(
-            strategy         = rcRaw?.get("strategy") as? String ?: "score_anchored",
-            upBandFraction   = (saRaw?.get("up_band_fraction")   as? Number)?.toFloat() ?: 0.021f,
-            downBandFraction = (saRaw?.get("down_band_fraction") as? Number)?.toFloat() ?: 0.002f,
-            minScore         = (rcRaw?.get("min_score")          as? Number)?.toInt()   ?: 1000,
-            wordGapFraction  = (rcRaw?.get("word_gap_fraction")  as? Number)?.toFloat() ?: 0.015f,
-            minWordGapPx     = (rcRaw?.get("min_word_gap_px")    as? Number)?.toInt()   ?: 8,
+            strategy             = rcRaw?.get("strategy")          as? String ?: "score_anchored",
+            upBandFraction       = (saRaw?.get("up_band_fraction")   as? Number)?.toFloat() ?: 0.021f,
+            downBandFraction     = (saRaw?.get("down_band_fraction") as? Number)?.toFloat() ?: 0.002f,
+            minScore             = (rcRaw?.get("min_score")          as? Number)?.toInt()   ?: 1000,
+            wordGapFraction      = (rcRaw?.get("word_gap_fraction")  as? Number)?.toFloat() ?: 0.015f,
+            minWordGapPx         = (rcRaw?.get("min_word_gap_px")    as? Number)?.toInt()   ?: 8,
+            yToleranceFraction   = (ypRaw?.get("tolerance_fraction") as? Number)?.toFloat() ?: 0.02f,
+            minTolerancePx       = (ypRaw?.get("min_tolerance_px")   as? Number)?.toInt()   ?: 20,
         )
 
         return ScreenLayout(
-            id                   = id,
-            name                 = name,
-            pageSignals          = pageSignals,
-            negativeSignals      = negativeSignals,
-            preOcrHint           = preOcrHint,
-            headerSignals        = headerSignals,
-            footerSignals        = footerSignals,
-            tabSignals           = tabSignals,
-            tabItems             = tabItems,
-            tabYHint             = tabYHint,
-            tabIndicatorStrategy = tabIndicatorStrategy,
-            chromeTopFraction    = chromeTopFraction,
-            chromeBottomFraction = chromeBotFraction,
-            columns              = columns,
-            rowClustering        = rowCluster,
+            id                              = id,
+            name                            = name,
+            pageSignals                     = pageSignals,
+            negativeSignals                 = negativeSignals,
+            preOcrHint                      = preOcrHint,
+            headerSignals                   = headerSignals,
+            footerSignals                   = footerSignals,
+            headerSearchYMin                = headerSearchYMin,
+            headerSearchYMax                = headerSearchYMax,
+            footerSearchYMin                = footerSearchYMin,
+            footerSearchYMax                = footerSearchYMax,
+            tabSignals                      = tabSignals,
+            tabItems                        = tabItems,
+            tabYHint                        = tabYHint,
+            tabSearchRegionYMin             = tabSearchRegionYMin,
+            tabSearchRegionYMax             = tabSearchRegionYMax,
+            tabIndicatorStrategy            = tabIndicatorStrategy,
+            tabIndicatorMinFraction         = tabIndicatorMinFraction,
+            tabIndicatorHsvColor            = tabIndicatorHsvColor,
+            tabIndicatorMinGap              = tabIndicatorMinGap,
+            tabIndicatorBboxPaddingFraction = tabIndicatorBboxPaddingFraction,
+            chromeTopFraction               = chromeTopFraction,
+            chromeBottomFraction            = chromeBotFraction,
+            columns                         = columns,
+            rowClustering                   = rowCluster,
+            tabGroupConfigs                 = tabGroupConfigs,
         )
     }
 
@@ -156,10 +193,23 @@ object ScreenDefinitionLoader {
         val items = tabsRaw?.get("items") as? List<Map<String, Any>> ?: return emptyList()
         return items.map { item ->
             TabItem(
-                id       = item["id"]       as? String      ?: "",
-                category = item["category"] as? String      ?: "",
+                id       = item["id"]       as? String       ?: "",
+                category = item["category"] as? String       ?: "",
                 signals  = item["signals"]  as? List<String> ?: emptyList(),
                 xHint    = (item["x_hint"]  as? Number)?.toFloat() ?: 0.5f,
+                group    = item["group"]    as? String       ?: "",
+            )
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun parseTabGroupConfigs(tabsRaw: Map<String, Any>?): Map<String, TabGroupConfig> {
+        val groupsRaw = tabsRaw?.get("groups") as? Map<String, Any> ?: return emptyMap()
+        return groupsRaw.mapValues { (_, v) ->
+            val g = v as? Map<String, Any>
+            TabGroupConfig(
+                strategy    = g?.get("strategy")    as? String ?: "color_fraction",
+                minFraction = (g?.get("min_fraction") as? Number)?.toFloat() ?: 0.10f,
             )
         }
     }

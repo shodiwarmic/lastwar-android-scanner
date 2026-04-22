@@ -9,8 +9,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -30,6 +33,8 @@ import kotlinx.coroutines.withContext
 import tools.perry.lastwarscanner.model.AppDatabase
 import tools.perry.lastwarscanner.model.MemberRow
 import tools.perry.lastwarscanner.model.PlayerScoreEntity
+import tools.perry.lastwarscanner.network.AllianceApiClient
+import tools.perry.lastwarscanner.network.RosterCache
 import tools.perry.lastwarscanner.network.SessionManager
 import tools.perry.lastwarscanner.sync.ServerSetupActivity
 import tools.perry.lastwarscanner.sync.SyncActivity
@@ -41,19 +46,11 @@ import java.util.*
 /**
  * Main activity for the Last War Scanner application.
  * This activity handles the user interface for starting/stopping the screen capture service,
- * displaying the scanned player scores in a sortable list, and exporting the data to CSV.
+ * displaying the scanned player scores in a expandable card list, and exporting the data to CSV.
  */
 class MainActivity : AppCompatActivity() {
 
-    /**
-     * Enum representing the columns that can be used for sorting the player list.
-     */
-    enum class SortColumn { PLAYER, MON, TUES, WED, THUR, FRI, SAT, POWER, KILLS, DONATION }
-
-    /**
-     * Enum representing the sort direction.
-     */
-    enum class SortOrder { ASC, DESC }
+    enum class SortMode { NAME_ASC, NAME_DESC, RECENT }
 
     private lateinit var tvStatus: TextView
     private lateinit var tvDetectedDay: TextView
@@ -63,22 +60,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnClear: Button
     private lateinit var btnExport: Button
     private lateinit var btnSync: Button
+    private lateinit var btnRefreshRoster: Button
     private lateinit var rvScores: RecyclerView
     private lateinit var adapter: ScoreAdapter
 
-    private lateinit var headerPlayer: TextView
-    private lateinit var headerMon: TextView
-    private lateinit var headerTues: TextView
-    private lateinit var headerWed: TextView
-    private lateinit var headerThur: TextView
-    private lateinit var headerFri: TextView
-    private lateinit var headerSat: TextView
-    private lateinit var headerPower: TextView
-    private lateinit var headerKills: TextView
-    private lateinit var headerDonation: TextView
+    private lateinit var etSearch: EditText
+    private lateinit var btnSort: Button
+    private lateinit var tvMemberCount: TextView
 
-    private var currentSortColumn = SortColumn.PLAYER
-    private var currentSortOrder = SortOrder.ASC
+    private var currentSortMode = SortMode.NAME_ASC
+    private var searchQuery = ""
     private var activeTabName = "Unknown"
     private var observationJob: Job? = null
 
@@ -93,7 +84,7 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val isScanning = intent?.getBooleanExtra(ScreenCaptureService.EXTRA_SCANNING, false) ?: false
             val day = intent?.getStringExtra(ScreenCaptureService.EXTRA_DAY)
-            
+
             runOnUiThread {
                 pbScanning.visibility = if (isScanning) View.VISIBLE else View.INVISIBLE
                 if (day != null) {
@@ -150,22 +141,38 @@ class MainActivity : AppCompatActivity() {
         btnClear = findViewById(R.id.btnClearLogs)
         btnExport = findViewById(R.id.btnExportCsv)
         btnSync = findViewById(R.id.btnSyncToServer)
+        btnRefreshRoster = findViewById(R.id.btnRefreshRoster)
         rvScores = findViewById(R.id.rvScores)
-
-        headerPlayer = findViewById(R.id.headerPlayer)
-        headerMon = findViewById(R.id.headerMon)
-        headerTues = findViewById(R.id.headerTues)
-        headerWed = findViewById(R.id.headerWed)
-        headerThur = findViewById(R.id.headerThur)
-        headerFri = findViewById(R.id.headerFri)
-        headerSat = findViewById(R.id.headerSat)
-        headerPower = findViewById(R.id.headerPower)
-        headerKills = findViewById(R.id.headerKills)
-        headerDonation = findViewById(R.id.headerDonation)
+        etSearch = findViewById(R.id.etSearch)
+        btnSort = findViewById(R.id.btnSort)
+        tvMemberCount = findViewById(R.id.tvMemberCount)
 
         setupRecyclerView()
-        setupSortHeaders()
-        updateHeaderUi()
+
+        // Search
+        etSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                searchQuery = s?.toString() ?: ""
+                observeDatabase()
+            }
+        })
+
+        // Sort cycling: NAME_ASC -> NAME_DESC -> RECENT -> NAME_ASC
+        btnSort.setOnClickListener {
+            currentSortMode = when (currentSortMode) {
+                SortMode.NAME_ASC  -> SortMode.NAME_DESC
+                SortMode.NAME_DESC -> SortMode.RECENT
+                SortMode.RECENT    -> SortMode.NAME_ASC
+            }
+            btnSort.text = when (currentSortMode) {
+                SortMode.NAME_ASC  -> getString(R.string.sort_name_asc)
+                SortMode.NAME_DESC -> getString(R.string.sort_name_desc)
+                SortMode.RECENT    -> getString(R.string.sort_recent)
+            }
+            observeDatabase()
+        }
 
         btnStart.setOnClickListener {
             if (!Settings.canDrawOverlays(this)) {
@@ -199,6 +206,9 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, target))
         }
 
+        updateRosterButton()
+        btnRefreshRoster.setOnClickListener { refreshRoster() }
+
         observeDatabase()
     }
 
@@ -212,7 +222,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Starts observing the database for player score changes and updates the UI accordingly.
+     * Handles filtering, sorting, and data transformation.
+     */
+    private fun observeDatabase() {
+        observationJob?.cancel()
+        observationJob = lifecycleScope.launch {
+            db.playerScoreDao().getAllScores().collectLatest { scores ->
+                val result = withContext(Dispatchers.Default) {
+                    val rows = transformToMemberRows(scores)
+                    val filtered = if (searchQuery.isBlank()) rows
+                        else rows.filter { it.name.contains(searchQuery, ignoreCase = true) }
+                    when (currentSortMode) {
+                        SortMode.NAME_ASC  -> filtered.sortedBy { it.name }
+                        SortMode.NAME_DESC -> filtered.sortedByDescending { it.name }
+                        SortMode.RECENT    -> filtered.sortedByDescending { it.latestTimestamp }
+                    }
+                }
+                tvMemberCount.text = "${result.size} member${if (result.size != 1) "s" else ""}"
+                adapter.submitList(result)
+            }
+        }
+    }
+
+    /**
      * Exports the collected player scores to a CSV file and opens a share intent.
+     * Dynamically builds columns from all keys present in the current data.
      */
     private fun exportToCsv() {
         lifecycleScope.launch {
@@ -225,27 +260,18 @@ class MainActivity : AppCompatActivity() {
             }
 
             val memberRows = withContext(Dispatchers.Default) { transformToMemberRows(scores) }
-            val csvHeader = getString(R.string.csv_header) + "\n"
+            val allKeys = memberRows.flatMap { it.scores.keys }.distinct()
+                .sortedBy { ScoreAdapter.categoryOrder(it) }
+            val csvHeader = (listOf("Member") + allKeys.map { ScoreAdapter.keyLabel(it) }).joinToString(",")
             val csvBody = memberRows.joinToString("\n") { row ->
-                listOf(
-                    row.name,
-                    row.getScore("Mon") ?: 0L,
-                    row.getScore("Tues") ?: 0L,
-                    row.getScore("Wed") ?: 0L,
-                    row.getScore("Thur") ?: 0L,
-                    row.getScore("Fri") ?: 0L,
-                    row.getScore("Sat") ?: 0L,
-                    row.getScore("Power") ?: 0L,
-                    row.getScore("Kills") ?: 0L,
-                    row.getScore("Donation") ?: 0L
-                ).joinToString(",")
+                (listOf(row.name) + allKeys.map { key -> row.getScore(key) ?: 0L }).joinToString(",")
             }
 
             val fileName = "LastWar_Export_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())}.csv"
             try {
                 val file = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName)
-                FileOutputStream(file).use { it.write((csvHeader + csvBody).toByteArray()) }
-                
+                FileOutputStream(file).use { it.write(("$csvHeader\n$csvBody").toByteArray()) }
+
                 val uri = FileProvider.getUriForFile(this@MainActivity, "${packageName}.fileprovider", file)
                 val intent = Intent(Intent.ACTION_SEND).apply {
                     type = "text/csv"
@@ -255,104 +281,6 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent.createChooser(intent, getString(R.string.share_csv_title)))
             } catch (e: Exception) {
                 Toast.makeText(this@MainActivity, getString(R.string.error_export_failed, e.localizedMessage ?: e.message), Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    /**
-     * Sets up click listeners for the list headers to enable sorting.
-     */
-    private fun setupSortHeaders() {
-        val clickListener = View.OnClickListener { view ->
-            val clickedColumn = when (view.id) {
-                R.id.headerPlayer -> SortColumn.PLAYER
-                R.id.headerMon -> SortColumn.MON
-                R.id.headerTues -> SortColumn.TUES
-                R.id.headerWed -> SortColumn.WED
-                R.id.headerThur -> SortColumn.THUR
-                R.id.headerFri -> SortColumn.FRI
-                R.id.headerSat -> SortColumn.SAT
-                R.id.headerPower -> SortColumn.POWER
-                R.id.headerKills -> SortColumn.KILLS
-                R.id.headerDonation -> SortColumn.DONATION
-                else -> SortColumn.PLAYER
-            }
-
-            if (currentSortColumn == clickedColumn) {
-                currentSortOrder = if (currentSortOrder == SortOrder.ASC) SortOrder.DESC else SortOrder.ASC
-            } else {
-                currentSortColumn = clickedColumn
-                currentSortOrder = if (clickedColumn == SortColumn.PLAYER) SortOrder.ASC else SortOrder.DESC
-            }
-
-            updateHeaderUi()
-            observeDatabase() 
-        }
-
-        headerPlayer.setOnClickListener(clickListener)
-        headerMon.setOnClickListener(clickListener)
-        headerTues.setOnClickListener(clickListener)
-        headerWed.setOnClickListener(clickListener)
-        headerThur.setOnClickListener(clickListener)
-        headerFri.setOnClickListener(clickListener)
-        headerSat.setOnClickListener(clickListener)
-        headerPower.setOnClickListener(clickListener)
-        headerKills.setOnClickListener(clickListener)
-        headerDonation.setOnClickListener(clickListener)
-    }
-
-    /**
-     * Updates the visual representation of the column headers to reflect the current sort state.
-     */
-    private fun updateHeaderUi() {
-        val headers = mapOf<SortColumn, Pair<TextView, String>>(
-            SortColumn.PLAYER to Pair(headerPlayer, getString(R.string.header_member)),
-            SortColumn.MON to Pair(headerMon, getString(R.string.header_mon)),
-            SortColumn.TUES to Pair(headerTues, getString(R.string.header_tues)),
-            SortColumn.WED to Pair(headerWed, getString(R.string.header_wed)),
-            SortColumn.THUR to Pair(headerThur, getString(R.string.header_thur)),
-            SortColumn.FRI to Pair(headerFri, getString(R.string.header_fri)),
-            SortColumn.SAT to Pair(headerSat, getString(R.string.header_sat)),
-            SortColumn.POWER to Pair(headerPower, getString(R.string.header_power)),
-            SortColumn.KILLS to Pair(headerKills, getString(R.string.header_kills)),
-            SortColumn.DONATION to Pair(headerDonation, getString(R.string.header_donation))
-        )
-
-        headers.forEach { (col, pair) ->
-            val (view, baseText) = pair
-            if (col == currentSortColumn) {
-                val arrow = if (currentSortOrder == SortOrder.ASC) " ↑" else " ↓"
-                view.text = getString(R.string.header_sort_format, baseText, arrow)
-            } else {
-                view.text = baseText
-            }
-        }
-    }
-
-    /**
-     * Starts observing the database for player score changes and updates the UI accordingly.
-     * Handles sorting and data transformation.
-     */
-    private fun observeDatabase() {
-        observationJob?.cancel()
-        observationJob = lifecycleScope.launch {
-            db.playerScoreDao().getAllScores().collectLatest { scores ->
-                val sortedList = withContext(Dispatchers.Default) {
-                    val memberRows = transformToMemberRows(scores)
-                    when (currentSortColumn) {
-                        SortColumn.PLAYER -> if (currentSortOrder == SortOrder.ASC) memberRows.sortedBy { it.name } else memberRows.sortedByDescending { it.name }
-                        SortColumn.MON -> sortRowsByKey(memberRows, "Mon")
-                        SortColumn.TUES -> sortRowsByKey(memberRows, "Tues")
-                        SortColumn.WED -> sortRowsByKey(memberRows, "Wed")
-                        SortColumn.THUR -> sortRowsByKey(memberRows, "Thur")
-                        SortColumn.FRI -> sortRowsByKey(memberRows, "Fri")
-                        SortColumn.SAT -> sortRowsByKey(memberRows, "Sat")
-                        SortColumn.POWER -> sortRowsByKey(memberRows, "Power")
-                        SortColumn.KILLS -> sortRowsByKey(memberRows, "Kills")
-                        SortColumn.DONATION -> sortRowsByKey(memberRows, "Donation")
-                    }
-                }
-                adapter.submitList(sortedList)
             }
         }
     }
@@ -373,17 +301,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Sorts a list of [MemberRow] objects based on the current sort order and a specific key.
-     */
-    private fun sortRowsByKey(rows: List<MemberRow>, key: String): List<MemberRow> {
-        return if (currentSortOrder == SortOrder.ASC) {
-            rows.sortedBy { it.getScore(key) ?: -1L }
-        } else {
-            rows.sortedByDescending { it.getScore(key) ?: -1L }
-        }
-    }
-
-    /**
      * Registers the [ocrReceiver] when the activity is resumed.
      */
     override fun onResume() {
@@ -395,6 +312,7 @@ class MainActivity : AppCompatActivity() {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(ocrReceiver, filter)
         }
+        updateRosterButton()
     }
 
     /**
@@ -420,6 +338,44 @@ class MainActivity : AppCompatActivity() {
             pbScanning.visibility = View.INVISIBLE
             btnStart.isEnabled = true
             btnStop.visibility = View.GONE
+        }
+    }
+
+    /** Shows the roster button (when logged in) and updates its member count label. */
+    private fun updateRosterButton() {
+        if (!sessionManager.isLoggedIn()) {
+            btnRefreshRoster.visibility = View.GONE
+            return
+        }
+        btnRefreshRoster.visibility = View.VISIBLE
+        val count = RosterCache.getCount(this)
+        btnRefreshRoster.text = if (count > 0)
+            getString(R.string.btn_refresh_roster, count)
+        else
+            getString(R.string.btn_refresh_roster_empty)
+    }
+
+    /** Fetches the member roster from the web API and saves it to [RosterCache]. */
+    private fun refreshRoster() {
+        btnRefreshRoster.isEnabled = false
+        btnRefreshRoster.text = getString(R.string.roster_refreshing)
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                AllianceApiClient(sessionManager).getMembers()
+            }
+            result.fold(
+                onSuccess = { members ->
+                    val names = members.map { it.name }
+                    RosterCache.save(this@MainActivity, names)
+                    updateRosterButton()
+                    Toast.makeText(this@MainActivity, getString(R.string.roster_refresh_success, names.size), Toast.LENGTH_SHORT).show()
+                },
+                onFailure = { e ->
+                    updateRosterButton()
+                    Toast.makeText(this@MainActivity, getString(R.string.roster_refresh_failed, e.localizedMessage ?: e.message), Toast.LENGTH_LONG).show()
+                }
+            )
+            btnRefreshRoster.isEnabled = true
         }
     }
 }

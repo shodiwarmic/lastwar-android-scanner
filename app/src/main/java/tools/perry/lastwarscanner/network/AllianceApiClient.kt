@@ -48,8 +48,7 @@ class AllianceApiClient(private val session: SessionManager) {
     suspend fun getMembers(): Result<List<MemberSummary>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val json = getJson(endpoint("/api/mobile/members"))
-                val arr = json.getJSONArray("members")
+                val arr = getJsonArray(endpoint("/api/mobile/members"))
                 List(arr.length()) { i ->
                     arr.getJSONObject(i).run {
                         MemberSummary(
@@ -172,6 +171,9 @@ class AllianceApiClient(private val session: SessionManager) {
     private fun getJson(url: String): JSONObject =
         readResponse(open(url, "GET", session.getToken()))
 
+    private fun getJsonArray(url: String): JSONArray =
+        readResponseArray(open(url, "GET", session.getToken()))
+
     private fun open(url: String, method: String, token: String?): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
@@ -193,6 +195,22 @@ class AllianceApiClient(private val session: SessionManager) {
                 throw HttpException(code, msg)
             }
             return JSONObject(raw)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun readResponseArray(conn: HttpURLConnection): JSONArray {
+        try {
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.readText() ?: "[]"
+            if (code !in 200..299) {
+                val err = runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
+                val msg = err.optString("message", "HTTP $code")
+                throw HttpException(code, msg)
+            }
+            return JSONArray(raw)
         } finally {
             conn.disconnect()
         }

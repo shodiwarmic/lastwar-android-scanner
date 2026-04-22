@@ -31,6 +31,7 @@ import kotlinx.coroutines.*
 import tools.perry.lastwarscanner.image.ImageUtils
 import tools.perry.lastwarscanner.model.AppDatabase
 import tools.perry.lastwarscanner.model.PlayerScoreEntity
+import tools.perry.lastwarscanner.network.RosterCache
 import tools.perry.lastwarscanner.ocr.OcrParser
 import tools.perry.lastwarscanner.ocr.OcrProcessor
 import tools.perry.lastwarscanner.ocr.ScreenDefinitionLoader
@@ -241,53 +242,174 @@ class ScreenCaptureService : Service() {
                 bitmap.copyPixelsFromBuffer(buffer)
                 image.close()
 
+                // Pre-OCR hint: fast single-pixel colour check before running the full
+                // (expensive) OCR pipeline. Skip this frame only if every layout that
+                // has a pre_ocr_hint fails its check — layouts without a hint are assumed
+                // to always be potential matches, so OCR still runs for those.
+                val shouldRunOcr = screenLayouts.any { layout ->
+                    layout.preOcrHint == null || checkPreOcrHint(bitmap, layout.preOcrHint)
+                }
+                if (!shouldRunOcr) {
+                    sendScanningBroadcast(false)
+                    isProcessing.set(false)
+                    bitmap.recycle()
+                    return@launch
+                }
+
                 val inputImage = InputImage.fromBitmap(bitmap, 0)
                 ocrProcessor.process(inputImage, onSuccess = { lines ->
                     val result = ocrParser.parse(lines, bitmap.width, bitmap.height, screenLayouts)
                     if (result.isConfirmedRankingPage) {
                         var activeDay = "Unknown"
-                        val useOrange = result.layout?.tabIndicatorStrategy == "color_fraction"
+                        val layout = result.layout
+                        val bboxPad = layout?.tabIndicatorBboxPaddingFraction ?: 0.007f
+                        val padPx = ((bitmap.width + bitmap.height) / 2 * bboxPad).toInt()
+                        val tabGroupConfigs = layout?.tabGroupConfigs ?: emptyMap()
 
-                        val candidates = mutableListOf<Pair<String, Float>>()
-                        for (tab in result.dayTabs) {
+                        fun sampleTab(tab: OcrParser.DayTab, useOrange: Boolean, minFraction: Float): Pair<String, Float>? {
+                            val paddedBounds = android.graphics.Rect(
+                                (tab.bounds.left   - padPx).coerceAtLeast(0),
+                                (tab.bounds.top    - padPx).coerceAtLeast(0),
+                                (tab.bounds.right  + padPx).coerceAtMost(bitmap.width),
+                                (tab.bounds.bottom + padPx).coerceAtMost(bitmap.height)
+                            )
+                            val hsvColor = layout?.tabIndicatorHsvColor
                             val pct = if (useOrange) {
-                                ImageUtils.getColorPercentage(bitmap, tab.bounds) { r, g, b -> ImageUtils.isOrange(r, g, b) }
+                                if (hsvColor != null) {
+                                    // Use YAML-defined HSV range — more accurate than the hardcoded RGB check
+                                    ImageUtils.getColorPercentage(bitmap, paddedBounds) { r, g, b ->
+                                        checkHsv(r, g, b, hsvColor)
+                                    }
+                                } else {
+                                    ImageUtils.getColorPercentage(bitmap, paddedBounds) { r, g, b -> ImageUtils.isOrange(r, g, b) }
+                                }
                             } else {
-                                ImageUtils.getColorPercentage(bitmap, tab.bounds) { r, g, b -> ImageUtils.isWhite(r, g, b) }
+                                ImageUtils.getColorPercentage(bitmap, paddedBounds) { r, g, b -> ImageUtils.isWhite(r, g, b) }
                             }
-                            if (pct > 0.10f) candidates.add(tab.day to pct)
+                            Log.d(TAG, "  sampleTab raw: day=${tab.day} pct=${"%.4f".format(pct)} minFraction=$minFraction paddedBounds=[${paddedBounds.left},${paddedBounds.top},${paddedBounds.right},${paddedBounds.bottom}]")
+                            return if (pct > minFraction) tab.day to pct else null
                         }
 
-                        if (candidates.isNotEmpty()) {
-                            activeDay = candidates.maxByOrNull { it.second }?.first ?: "Unknown"
+                        if (tabGroupConfigs.isNotEmpty()) {
+                            val groupCandidates = mutableMapOf<String, MutableList<Pair<String, Float>>>()
+                            for (tab in result.dayTabs) {
+                                val groupId = tab.group.ifEmpty { continue }
+                                val groupConfig = tabGroupConfigs[groupId] ?: continue
+                                val useOrange = groupConfig.strategy == "color_fraction"
+                                val sampled = sampleTab(tab, useOrange, groupConfig.minFraction)
+                                Log.d(TAG, "tab sample: group=$groupId id=${tab.day} bounds=${tab.bounds.left}..${tab.bounds.right} y=${tab.bounds.top}..${tab.bounds.bottom} pct=${sampled?.second} passed=${sampled != null}")
+                                sampled?.let { groupCandidates.getOrPut(groupId) { mutableListOf() }.add(it) }
+                            }
+                            val winners = tabGroupConfigs.keys.sorted()
+                                .mapNotNull { gId -> groupCandidates[gId]?.maxByOrNull { it.second }?.first }
+                            Log.d(TAG, "tab winners: $winners (need ${tabGroupConfigs.size})")
+                            if (winners.size == tabGroupConfigs.size) {
+                                activeDay = winners.joinToString("_")
+                            }
+                        } else {
+                            val useOrange = layout?.tabIndicatorStrategy == "color_fraction"
+                            val minFraction = layout?.tabIndicatorMinFraction ?: 0.10f
+                            val minGap = layout?.tabIndicatorMinGap ?: 0.04f
+                            val candidates = result.dayTabs.mapNotNull { sampleTab(it, useOrange, minFraction) }
+                            if (candidates.isNotEmpty()) {
+                                if (useOrange) {
+                                    // color_fraction: each tab passes independently, pick the strongest
+                                    activeDay = candidates.maxByOrNull { it.second }?.first ?: "Unknown"
+                                } else {
+                                    // brightest: require a clear gap between winner and runner-up
+                                    // to avoid picking the wrong day tab when two tabs look similar
+                                    val sorted = candidates.sortedByDescending { it.second }
+                                    val winner = sorted[0]
+                                    val runnerUp = sorted.getOrNull(1)
+                                    if (runnerUp == null || (winner.second - runnerUp.second) >= minGap) {
+                                        activeDay = winner.first
+                                    }
+                                }
+                            }
                         }
 
                         if (result.players.isNotEmpty()) {
                             serviceScope.launch {
+                                // Fetch the full member roster once per frame. Used as a
+                                // score-independent fallback when exact and score-based lookups
+                                // both fail (e.g. OCR noise variant of a known name, or the
+                                // player's score changed since the last scan).
+                                val knownNames = db.playerScoreDao().getAllKnownNames()
+                                // Web roster: canonical member names fetched manually by the user.
+                                // Lookup 4 normalises OCR names to server-side spellings before
+                                // a new DB entry is created.
+                                val rosterNames = RosterCache.getNames(applicationContext)
+
                                 for (player in result.players) {
-                                    val scoreLong = player.score.toLongOrNull() ?: continue
-                                    var latest = db.playerScoreDao().getLatestPlayerEntry(player.name)
-                                    
+                                    // Resolve crash-token ambiguity: if the row had multiple
+                                    // valid name/score splits, find the one that best matches
+                                    // an existing DB record before committing.
+                                    val resolvedPlayer = if (player.candidates.size > 1) {
+                                        resolveCrashCandidate(player, knownNames) ?: player
+                                    } else player
+
+                                    val scoreLong = resolvedPlayer.score.toLongOrNull() ?: continue
+
+                                    // Lookup 1: exact name match
+                                    var latest = db.playerScoreDao().getLatestPlayerEntry(resolvedPlayer.name)
+
+                                    // Lookup 2: score match + fuzzy name (handles slight OCR
+                                    // variants when the score hasn't changed)
                                     if (latest == null) {
                                         val playersWithSameScore = db.playerScoreDao().getPlayersByScore(scoreLong)
                                         for (candidate in playersWithSameScore) {
-                                            if (isSimilar(player.name, candidate.name)) {
+                                            if (isSimilar(resolvedPlayer.name, candidate.name)) {
                                                 latest = candidate
                                                 break
                                             }
                                         }
                                     }
 
-                                    val nameChanged = latest != null && player.name.length < latest.name.length && latest.name.contains(player.name)
-                                    val finalName = if (nameChanged) player.name else (latest?.name ?: player.name)
+                                    // Lookup 3: fuzzy name match against the full DB roster —
+                                    // catches OCR noise variants when the score has also changed.
+                                    // Prefer the OCR name when it is shorter and the DB name
+                                    // contains it — this corrects stale dirty names (e.g. a
+                                    // previously stored "R3cklessBadger1" when the clean OCR
+                                    // result is "R3cklessBadger").
+                                    var canonicalName = resolvedPlayer.name
+                                    if (latest == null && knownNames.isNotEmpty()) {
+                                        val match = knownNames.find { isSimilar(resolvedPlayer.name, it) }
+                                        if (match != null) {
+                                            latest = db.playerScoreDao().getLatestPlayerEntry(match)
+                                            canonicalName = if (
+                                                resolvedPlayer.name.length < match.length &&
+                                                match.contains(resolvedPlayer.name)
+                                            ) resolvedPlayer.name else match
+                                        }
+                                    }
+
+                                    // Lookup 4: fuzzy match against the web roster — normalises
+                                    // the name to the canonical server-side spelling even before
+                                    // this player has appeared in a previous local scan.
+                                    if (latest == null && rosterNames.isNotEmpty()) {
+                                        val match = rosterNames.find { isSimilar(resolvedPlayer.name, it) }
+                                        if (match != null) {
+                                            latest = db.playerScoreDao().getLatestPlayerEntry(match)
+                                            canonicalName = if (
+                                                resolvedPlayer.name.length < match.length &&
+                                                match.contains(resolvedPlayer.name)
+                                            ) resolvedPlayer.name else match
+                                        }
+                                    }
+
+                                    val nameChanged = latest != null && canonicalName.length < latest.name.length && latest.name.contains(canonicalName)
+                                    val finalName = if (nameChanged) canonicalName else (latest?.name ?: canonicalName)
 
                                     // Always save/refresh the crop so the review screen has a
                                     // current image even when the score hasn't changed.
-                                    val snapshotPath = player.rowBounds?.let { bounds ->
+                                    val snapshotPath = resolvedPlayer.rowBounds?.let { bounds ->
                                         saveRowCrop(bitmap, bounds, finalName, activeDay)
                                     }
 
+                                    Log.d(TAG, "player: ocr=\"${resolvedPlayer.name}\" score=${resolvedPlayer.score} → canonical=\"$canonicalName\" finalName=\"$finalName\" scoreLong=$scoreLong nameChanged=$nameChanged latestName=\"${latest?.name}\" latestScore=${latest?.score}")
+
                                     if (latest == null || latest.score != scoreLong || nameChanged) {
+                                        Log.d(TAG, "  → INSERT name=\"$finalName\" score=$scoreLong day=$activeDay")
                                         db.playerScoreDao().insert(PlayerScoreEntity(
                                             name = finalName,
                                             score = scoreLong,
@@ -349,6 +471,74 @@ class ScreenCaptureService : Service() {
         intent.putExtra(EXTRA_DAY, day)
         intent.putExtra(EXTRA_SCANNING, false)
         sendBroadcast(intent)
+    }
+
+    /**
+     * Tries each crash-token candidate against the existing DB roster, in priority order:
+     *   1. Exact name match in the DB.
+     *   2. Score match + Levenshtein fuzzy name match.
+     *   3. Fuzzy name match against [knownNames] regardless of score — handles the case
+     *      where the score has changed since the last scan of this player.
+     *
+     * Returns the resolved [PlayerScore] with the canonical DB name, or null if no
+     * candidate matched (caller should fall back to candidates[0]).
+     */
+    private suspend fun resolveCrashCandidate(
+        player: tools.perry.lastwarscanner.model.PlayerScore,
+        knownNames: List<String>
+    ): tools.perry.lastwarscanner.model.PlayerScore? {
+        // Step 1: exact name match
+        for (candidate in player.candidates) {
+            if (db.playerScoreDao().getLatestPlayerEntry(candidate.name) != null) {
+                return player.copy(name = candidate.name, score = candidate.score, candidates = emptyList())
+            }
+        }
+        // Step 2: score match + fuzzy name match
+        for (candidate in player.candidates) {
+            val s = candidate.score.toLongOrNull() ?: continue
+            for (dbEntry in db.playerScoreDao().getPlayersByScore(s)) {
+                if (isSimilar(candidate.name, dbEntry.name)) {
+                    return player.copy(name = candidate.name, score = candidate.score, candidates = emptyList())
+                }
+            }
+        }
+        // Step 3: fuzzy name match against all known members (score-independent).
+        // The candidate with the name closest to a roster entry wins; use the canonical
+        // DB name so subsequent dedup logic resolves against the correct record.
+        for (candidate in player.candidates) {
+            val match = knownNames.find { isSimilar(candidate.name, it) }
+            if (match != null) {
+                return player.copy(name = match, score = candidate.score, candidates = emptyList())
+            }
+        }
+        return null
+    }
+
+    /**
+     * Returns true if the RGB pixel matches the given HSV colour range.
+     * Hue is normalised to [0, 1] (Android's [Color.RGBToHSV] returns 0–360).
+     */
+    private fun checkHsv(r: Int, g: Int, b: Int, config: tools.perry.lastwarscanner.ocr.HsvColorConfig): Boolean {
+        val hsv = FloatArray(3)
+        android.graphics.Color.RGBToHSV(r, g, b, hsv)
+        val h = hsv[0] / 360f
+        return h >= config.hMin && h <= config.hMax && hsv[1] >= config.sMin && hsv[2] >= config.vMin
+    }
+
+    /**
+     * Checks the single pixel at the layout's pre_ocr_hint position against the HSV colour
+     * range defined in the hint. Returns true if the pixel colour falls within the range,
+     * meaning this frame is plausibly showing the layout's screen.
+     */
+    private fun checkPreOcrHint(bitmap: android.graphics.Bitmap, hint: tools.perry.lastwarscanner.ocr.PreOcrHint): Boolean {
+        val x = (hint.xHint * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+        val y = (hint.yHint * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+        val pixel = bitmap.getPixel(x, y)
+        val config = tools.perry.lastwarscanner.ocr.HsvColorConfig(
+            hMin = hint.hsvHMin, hMax = hint.hsvHMax, sMin = hint.hsvSMin, vMin = hint.hsvVMin
+        )
+        return checkHsv(android.graphics.Color.red(pixel), android.graphics.Color.green(pixel),
+            android.graphics.Color.blue(pixel), config)
     }
 
     private fun isSimilar(name1: String, name2: String): Boolean {
