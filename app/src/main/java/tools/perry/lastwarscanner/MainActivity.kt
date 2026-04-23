@@ -130,6 +130,11 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Eagerly load shared constants so OcrParser.crashSplits (a
+        // companion-object helper that has no Context) can reach them via
+        // ConstantsLoader.cached() on the very first frame.
+        tools.perry.lastwarscanner.ocr.ConstantsLoader.load(applicationContext)
+
         db = AppDatabase.getDatabase(this)
         sessionManager = SessionManager(this)
 

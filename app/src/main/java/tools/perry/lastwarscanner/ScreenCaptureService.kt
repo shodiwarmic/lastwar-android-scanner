@@ -281,10 +281,12 @@ class ScreenCaptureService : Service() {
                                         checkHsv(r, g, b, hsvColor)
                                     }
                                 } else {
-                                    ImageUtils.getColorPercentage(bitmap, paddedBounds) { r, g, b -> ImageUtils.isOrange(r, g, b) }
+                                    val orange = tools.perry.lastwarscanner.ocr.ConstantsLoader.load(applicationContext).orangeRgb
+                                    ImageUtils.getColorPercentage(bitmap, paddedBounds) { r, g, b -> orange.matches(r, g, b) }
                                 }
                             } else {
-                                ImageUtils.getColorPercentage(bitmap, paddedBounds) { r, g, b -> ImageUtils.isWhite(r, g, b) }
+                                val white = tools.perry.lastwarscanner.ocr.ConstantsLoader.load(applicationContext).whiteRgb
+                                ImageUtils.getColorPercentage(bitmap, paddedBounds) { r, g, b -> white.matches(r, g, b) }
                             }
                             Log.d(TAG, "  sampleTab raw: day=${tab.day} pct=${"%.4f".format(pct)} minFraction=$minFraction paddedBounds=[${paddedBounds.left},${paddedBounds.top},${paddedBounds.right},${paddedBounds.bottom}]")
                             return if (pct > minFraction) tab.day to pct else null

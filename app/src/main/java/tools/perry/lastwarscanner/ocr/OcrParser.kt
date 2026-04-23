@@ -772,7 +772,14 @@ class OcrParser {
          */
         internal fun crashSplits(text: String): List<Pair<String, String>> {
             if (text.none { it.isLetter() }) return emptyList()
-            val scorePattern = Regex("""^\d{1,3}(?:,\d{3})+$""")
+            // Pattern is sourced from screen-definitions/constants.yaml under
+            // `crash_tokens.score_suffix_pattern`. Fall back to the canonical
+            // value when ConstantsLoader hasn't been initialised yet — matches
+            // the YAML so test environments without an Android Context still
+            // behave correctly.
+            val patternBody = ConstantsLoader.cached()?.crashTokens?.scoreSuffixPattern
+                ?: """\d{1,3}(?:,\d{3})+"""
+            val scorePattern = Regex("^$patternBody$")
             val splits = mutableListOf<Pair<String, String>>()
             for (i in 1 until text.length) {
                 val suffix = text.substring(i)
