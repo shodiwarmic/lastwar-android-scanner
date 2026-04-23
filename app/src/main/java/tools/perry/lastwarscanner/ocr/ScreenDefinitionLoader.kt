@@ -9,8 +9,10 @@ import org.yaml.snakeyaml.Yaml
  * Asset layout expected under app/src/main/assets/:
  *   screen_definitions/catalog.yaml
  *   screen_definitions/screens/daily_ranking.yaml
- *   screen_definitions/screens/strength_ranking.yaml
  *   screen_definitions/screens/weekly_ranking.yaml
+ *   screen_definitions/screens/strength_metrics.yaml
+ *   screen_definitions/screens/strength_donation.yaml
+ *   screen_definitions/screens/season_contribution.yaml
  *
  * Definitions are loaded in catalog priority order (lowest number first) so
  * that [OcrParser] checks the most-specific screen before the broadest match.
