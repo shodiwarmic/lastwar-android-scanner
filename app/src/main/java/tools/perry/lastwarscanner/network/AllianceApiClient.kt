@@ -107,6 +107,7 @@ class AllianceApiClient(private val session: SessionManager) {
                     message = json.optString("message", ""),
                     vsRecordsSaved = json.optInt("vs_records_saved", 0),
                     powerRecordsSaved = json.optInt("power_records_saved", 0),
+                    killsRecordsSaved = json.optInt("kill_records_saved", 0),
                     aliasesSaved = json.optInt("aliases_saved", 0),
                     errors = List(errArr.length()) { i -> errArr.getString(i) }
                 )
