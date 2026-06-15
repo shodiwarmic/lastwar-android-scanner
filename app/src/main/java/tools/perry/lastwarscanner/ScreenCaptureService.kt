@@ -31,8 +31,13 @@ import kotlinx.coroutines.*
 import tools.perry.lastwarscanner.image.ImageUtils
 import tools.perry.lastwarscanner.model.AppDatabase
 import tools.perry.lastwarscanner.model.PlayerScoreEntity
+import tools.perry.lastwarscanner.network.RosterCache
 import tools.perry.lastwarscanner.ocr.OcrParser
 import tools.perry.lastwarscanner.ocr.OcrProcessor
+import tools.perry.lastwarscanner.ocr.ScreenDefinitionLoader
+import tools.perry.lastwarscanner.ocr.ScreenLayout
+import android.graphics.Rect
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
@@ -50,6 +55,7 @@ class ScreenCaptureService : Service() {
     private val ocrProcessor = OcrProcessor()
     private val ocrParser = OcrParser()
     private lateinit var db: AppDatabase
+    private var screenLayouts: List<ScreenLayout> = emptyList()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val isProcessing = AtomicBoolean(false)
 
@@ -135,6 +141,7 @@ class ScreenCaptureService : Service() {
 
         if (resultCode == RESULT_OK && data != null) {
             db = AppDatabase.getDatabase(this)
+            screenLayouts = ScreenDefinitionLoader.loadAll(this)
             setupOverlay()
             handler.postDelayed({ setupMediaProjection(resultCode, data) }, 100)
         } else {
@@ -224,6 +231,7 @@ class ScreenCaptureService : Service() {
 
         serviceScope.launch(Dispatchers.IO) {
             var bitmap: Bitmap? = null
+            var ocrBitmap: Bitmap? = null
             try {
                 val planes = image.planes
                 val buffer = planes[0].buffer
@@ -235,80 +243,235 @@ class ScreenCaptureService : Service() {
                 bitmap.copyPixelsFromBuffer(buffer)
                 image.close()
 
+                // Pre-OCR hint: fast single-pixel colour check before running the full
+                // (expensive) OCR pipeline. Skip this frame only if every layout that
+                // has a pre_ocr_hint fails its check — layouts without a hint are assumed
+                // to always be potential matches, so OCR still runs for those.
+                val shouldRunOcr = screenLayouts.any { layout ->
+                    layout.preOcrHint == null || checkPreOcrHint(bitmap, layout.preOcrHint)
+                }
+                if (!shouldRunOcr) {
+                    sendScanningBroadcast(false)
+                    isProcessing.set(false)
+                    bitmap.recycle()
+                    return@launch
+                }
+
+                ocrBitmap = enhanceForOcr(bitmap)
                 val inputImage = InputImage.fromBitmap(bitmap, 0)
+                val enhancedImage = InputImage.fromBitmap(ocrBitmap, 0)
                 ocrProcessor.process(inputImage, onSuccess = { lines ->
-                    val result = ocrParser.parse(lines, bitmap.width, bitmap.height)
+                    val result = ocrParser.parse(lines, bitmap.width, bitmap.height, screenLayouts)
                     if (result.isConfirmedRankingPage) {
                         var activeDay = "Unknown"
-                        val layoutId = result.layout?.id ?: ""
+                        val layout = result.layout
+                        val bboxPad = layout?.tabIndicatorBboxPaddingFraction ?: 0.007f
+                        val padPx = ((bitmap.width + bitmap.height) / 2 * bboxPad).toInt()
+                        val tabGroupConfigs = layout?.tabGroupConfigs ?: emptyMap()
 
-                        val candidates = mutableListOf<Pair<String, Float>>()
-                        for (tab in result.dayTabs) {
-                            val pct = if (layoutId == "strength_ranking") {
-                                ImageUtils.getColorPercentage(bitmap, tab.bounds) { r, g, b -> ImageUtils.isOrange(r, g, b) }
+                        fun sampleTab(tab: OcrParser.DayTab, useOrange: Boolean, minFraction: Float): Pair<String, Float>? {
+                            val paddedBounds = android.graphics.Rect(
+                                (tab.bounds.left   - padPx).coerceAtLeast(0),
+                                (tab.bounds.top    - padPx).coerceAtLeast(0),
+                                (tab.bounds.right  + padPx).coerceAtMost(bitmap.width),
+                                (tab.bounds.bottom + padPx).coerceAtMost(bitmap.height)
+                            )
+                            val hsvColor = layout?.tabIndicatorHsvColor
+                            val pct = if (useOrange) {
+                                if (hsvColor != null) {
+                                    // Use YAML-defined HSV range — more accurate than the hardcoded RGB check
+                                    ImageUtils.getColorPercentage(bitmap, paddedBounds) { r, g, b ->
+                                        checkHsv(r, g, b, hsvColor)
+                                    }
+                                } else {
+                                    val orange = tools.perry.lastwarscanner.ocr.ConstantsLoader.load(applicationContext).orangeRgb
+                                    ImageUtils.getColorPercentage(bitmap, paddedBounds) { r, g, b -> orange.matches(r, g, b) }
+                                }
                             } else {
-                                ImageUtils.getColorPercentage(bitmap, tab.bounds) { r, g, b -> ImageUtils.isWhite(r, g, b) }
+                                val white = tools.perry.lastwarscanner.ocr.ConstantsLoader.load(applicationContext).whiteRgb
+                                ImageUtils.getColorPercentage(bitmap, paddedBounds) { r, g, b -> white.matches(r, g, b) }
                             }
-                            if (pct > 0.10f) candidates.add(tab.day to pct)
+                            Log.d(TAG, "  sampleTab raw: day=${tab.day} pct=${"%.4f".format(pct)} minFraction=$minFraction paddedBounds=[${paddedBounds.left},${paddedBounds.top},${paddedBounds.right},${paddedBounds.bottom}]")
+                            return if (pct > minFraction) tab.day to pct else null
                         }
 
-                        if (candidates.isNotEmpty()) {
-                            activeDay = candidates.maxByOrNull { it.second }?.first ?: "Unknown"
+                        if (tabGroupConfigs.isNotEmpty()) {
+                            val groupCandidates = mutableMapOf<String, MutableList<Pair<String, Float>>>()
+                            for (tab in result.dayTabs) {
+                                val groupId = tab.group.ifEmpty { continue }
+                                val groupConfig = tabGroupConfigs[groupId] ?: continue
+                                val useOrange = groupConfig.strategy == "color_fraction"
+                                val sampled = sampleTab(tab, useOrange, groupConfig.minFraction)
+                                Log.d(TAG, "tab sample: group=$groupId id=${tab.day} bounds=${tab.bounds.left}..${tab.bounds.right} y=${tab.bounds.top}..${tab.bounds.bottom} pct=${sampled?.second} passed=${sampled != null}")
+                                sampled?.let { groupCandidates.getOrPut(groupId) { mutableListOf() }.add(it) }
+                            }
+                            val winners = tabGroupConfigs.keys.sorted()
+                                .mapNotNull { gId -> groupCandidates[gId]?.maxByOrNull { it.second }?.first }
+                            Log.d(TAG, "tab winners: $winners (need ${tabGroupConfigs.size})")
+                            if (winners.size == tabGroupConfigs.size) {
+                                activeDay = winners.joinToString("_")
+                            }
+                        } else {
+                            val useOrange = layout?.tabIndicatorStrategy == "color_fraction"
+                            val minFraction = layout?.tabIndicatorMinFraction ?: 0.10f
+                            val minGap = layout?.tabIndicatorMinGap ?: 0.04f
+                            val candidates = result.dayTabs.mapNotNull { sampleTab(it, useOrange, minFraction) }
+                            if (candidates.isNotEmpty()) {
+                                if (useOrange) {
+                                    // color_fraction: each tab passes independently, pick the strongest
+                                    activeDay = candidates.maxByOrNull { it.second }?.first ?: "Unknown"
+                                } else {
+                                    // brightest: require a clear gap between winner and runner-up
+                                    // to avoid picking the wrong day tab when two tabs look similar
+                                    val sorted = candidates.sortedByDescending { it.second }
+                                    val winner = sorted[0]
+                                    val runnerUp = sorted.getOrNull(1)
+                                    if (runnerUp == null || (winner.second - runnerUp.second) >= minGap) {
+                                        activeDay = winner.first
+                                    }
+                                }
+                            }
                         }
 
                         if (result.players.isNotEmpty()) {
                             serviceScope.launch {
+                                // Fetch the full member roster once per frame. Used as a
+                                // score-independent fallback when exact and score-based lookups
+                                // both fail (e.g. OCR noise variant of a known name, or the
+                                // player's score changed since the last scan).
+                                val knownNames = db.playerScoreDao().getAllKnownNames()
+                                // Web roster: members and aliases scoped to the current user
+                                // (see lastwar-screen-definitions/README.md, "Name resolution").
+                                // Lookup 4 runs the alias-priority match first and only falls
+                                // back to fuzzy name matching when no alias resolves.
+                                val rosterMembers = RosterCache.getMembers(applicationContext)
+                                val rosterNames = rosterMembers.map { it.name }
+
                                 for (player in result.players) {
-                                    val scoreLong = player.score.toLongOrNull() ?: continue
-                                    var latest = db.playerScoreDao().getLatestPlayerEntry(player.name)
-                                    
+                                    // Resolve crash-token ambiguity: if the row had multiple
+                                    // valid name/score splits, find the one that best matches
+                                    // an existing DB record (or a roster alias) before committing.
+                                    val resolvedPlayer = if (player.candidates.size > 1) {
+                                        resolveCrashCandidate(player, knownNames, rosterMembers) ?: player
+                                    } else player
+
+                                    val scoreLong = resolvedPlayer.score.toLongOrNull() ?: continue
+
+                                    // Lookup 1: exact name match
+                                    var latest = db.playerScoreDao().getLatestPlayerEntry(resolvedPlayer.name)
+
+                                    // Lookup 2: score match + fuzzy name (handles slight OCR
+                                    // variants when the score hasn't changed)
                                     if (latest == null) {
                                         val playersWithSameScore = db.playerScoreDao().getPlayersByScore(scoreLong)
                                         for (candidate in playersWithSameScore) {
-                                            if (isSimilar(player.name, candidate.name)) {
+                                            if (isSimilar(resolvedPlayer.name, candidate.name)) {
                                                 latest = candidate
                                                 break
                                             }
                                         }
                                     }
 
-                                    val nameChanged = latest != null && player.name.length < latest.name.length && latest.name.contains(player.name)
-                                    
+                                    // Lookup 3: fuzzy name match against the full DB roster —
+                                    // catches OCR noise variants when the score has also changed.
+                                    // Prefer the OCR name when it is shorter and the DB name
+                                    // contains it — this corrects stale dirty names (e.g. a
+                                    // previously stored "R3cklessBadger1" when the clean OCR
+                                    // result is "R3cklessBadger").
+                                    var canonicalName = resolvedPlayer.name
+                                    if (latest == null && knownNames.isNotEmpty()) {
+                                        val match = knownNames.find { isSimilar(resolvedPlayer.name, it) }
+                                        if (match != null) {
+                                            latest = db.playerScoreDao().getLatestPlayerEntry(match)
+                                            canonicalName = if (
+                                                resolvedPlayer.name.length < match.length &&
+                                                match.contains(resolvedPlayer.name)
+                                            ) resolvedPlayer.name else match
+                                        }
+                                    }
+
+                                    // Lookup 4: web-roster alias resolver — mirrors the backend's
+                                    // resolveMemberAlias hierarchy (Exact → Personal → Global → OCR).
+                                    // This runs BEFORE fuzzy so a known alias always wins over a
+                                    // typo-distance heuristic.
+                                    if (latest == null && rosterMembers.isNotEmpty()) {
+                                        val aliasMatch = tools.perry.lastwarscanner.ocr.RosterAliasResolver
+                                            .resolve(resolvedPlayer.name, rosterMembers)
+                                        if (aliasMatch != null) {
+                                            latest = db.playerScoreDao().getLatestPlayerEntry(aliasMatch.member.name)
+                                            canonicalName = aliasMatch.member.name
+                                            Log.d(TAG, "  alias match: \"${resolvedPlayer.name}\" → \"${canonicalName}\" (${aliasMatch.matchType})")
+                                        }
+                                    }
+
+                                    // Lookup 5: fuzzy match against the web roster — last-chance
+                                    // OCR-noise fallback for names that aren't an exact alias hit.
+                                    if (latest == null && rosterNames.isNotEmpty()) {
+                                        val match = rosterNames.find { isSimilar(resolvedPlayer.name, it) }
+                                        if (match != null) {
+                                            latest = db.playerScoreDao().getLatestPlayerEntry(match)
+                                            canonicalName = if (
+                                                resolvedPlayer.name.length < match.length &&
+                                                match.contains(resolvedPlayer.name)
+                                            ) resolvedPlayer.name else match
+                                        }
+                                    }
+
+                                    val nameChanged = latest != null && canonicalName.length < latest.name.length && latest.name.contains(canonicalName)
+                                    val finalName = if (nameChanged) canonicalName else (latest?.name ?: canonicalName)
+
+                                    // Always save/refresh the crop so the review screen has a
+                                    // current image even when the score hasn't changed.
+                                    val snapshotPath = resolvedPlayer.rowBounds?.let { bounds ->
+                                        saveRowCrop(bitmap, bounds, finalName, activeDay)
+                                    }
+
+                                    Log.d(TAG, "player: ocr=\"${resolvedPlayer.name}\" score=${resolvedPlayer.score} → canonical=\"$canonicalName\" finalName=\"$finalName\" scoreLong=$scoreLong nameChanged=$nameChanged latestName=\"${latest?.name}\" latestScore=${latest?.score}")
+
                                     if (latest == null || latest.score != scoreLong || nameChanged) {
-                                        val finalName = if (nameChanged) player.name else (latest?.name ?: player.name)
+                                        Log.d(TAG, "  → INSERT name=\"$finalName\" score=$scoreLong day=$activeDay")
                                         db.playerScoreDao().insert(PlayerScoreEntity(
                                             name = finalName,
                                             score = scoreLong,
                                             day = activeDay,
-                                            timestamp = System.currentTimeMillis()
+                                            timestamp = System.currentTimeMillis(),
+                                            rowSnapshotPath = snapshotPath
                                         ))
+                                    } else if (snapshotPath != null) {
+                                        // Score unchanged — just refresh the snapshot path.
+                                        db.playerScoreDao().updateSnapshotPath(finalName, activeDay, snapshotPath)
                                     }
                                 }
                                 sendResultBroadcast(activeDay)
                                 isProcessing.set(false)
+                                ocrBitmap?.recycle()
                                 bitmap.recycle()
                             }
                         } else {
                             sendScanningBroadcast(false)
                             isProcessing.set(false)
+                            ocrBitmap.recycle()
                             bitmap.recycle()
                         }
                     } else {
                         sendScanningBroadcast(false)
                         isProcessing.set(false)
+                        ocrBitmap.recycle()
                         bitmap.recycle()
                     }
-                }, onError = { exception -> 
+                }, onError = { exception ->
                     Log.e(TAG, "OCR Error: ${exception.message}")
                     sendScanningBroadcast(false)
                     isProcessing.set(false)
+                    ocrBitmap?.recycle()
                     bitmap.recycle()
-                })
+                }, enhancedImage = enhancedImage)
             } catch (e: Exception) {
                 Log.e(TAG, "Capture Error: ${e.message}")
                 try { image.close() } catch (_: Exception) {}
                 sendScanningBroadcast(false)
                 isProcessing.set(false)
+                ocrBitmap?.recycle()
                 bitmap?.recycle()
             }
         }
@@ -335,6 +498,108 @@ class ScreenCaptureService : Service() {
         sendBroadcast(intent)
     }
 
+    /**
+     * Returns a grayscale + contrast-enhanced copy of [src] for better OCR on low-contrast
+     * rows (e.g. rank-2 light-blue-background / medium-blue-text). The original bitmap is
+     * kept unchanged for colour-based tab detection.
+     */
+    private fun enhanceForOcr(src: Bitmap): Bitmap {
+        val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(out)
+        val paint = android.graphics.Paint()
+        val cm = android.graphics.ColorMatrix()
+        cm.setSaturation(0f)
+        cm.postConcat(android.graphics.ColorMatrix(floatArrayOf(
+            1.6f, 0f,   0f,   0f, -80f,
+            0f,   1.6f, 0f,   0f, -80f,
+            0f,   0f,   1.6f, 0f, -80f,
+            0f,   0f,   0f,   1f,   0f,
+        )))
+        paint.colorFilter = android.graphics.ColorMatrixColorFilter(cm)
+        canvas.drawBitmap(src, 0f, 0f, paint)
+        return out
+    }
+
+    /**
+     * Tries each crash-token candidate against the existing DB roster, in priority order:
+     *   1. Exact name match in the DB.
+     *   2. Score match + Levenshtein fuzzy name match.
+     *   3. Fuzzy name match against [knownNames] regardless of score — handles the case
+     *      where the score has changed since the last scan of this player.
+     *
+     * Returns the resolved [PlayerScore] with the canonical DB name, or null if no
+     * candidate matched (caller should fall back to candidates[0]).
+     */
+    private suspend fun resolveCrashCandidate(
+        player: tools.perry.lastwarscanner.model.PlayerScore,
+        knownNames: List<String>,
+        rosterMembers: List<tools.perry.lastwarscanner.network.MemberSummary>
+    ): tools.perry.lastwarscanner.model.PlayerScore? {
+        // Step 1: exact name match
+        for (candidate in player.candidates) {
+            if (db.playerScoreDao().getLatestPlayerEntry(candidate.name) != null) {
+                return player.copy(name = candidate.name, score = candidate.score, candidates = emptyList())
+            }
+        }
+        // Step 2: score match + fuzzy name match
+        for (candidate in player.candidates) {
+            val s = candidate.score.toLongOrNull() ?: continue
+            for (dbEntry in db.playerScoreDao().getPlayersByScore(s)) {
+                if (isSimilar(candidate.name, dbEntry.name)) {
+                    return player.copy(name = candidate.name, score = candidate.score, candidates = emptyList())
+                }
+            }
+        }
+        // Step 3: fuzzy name match against all known members (score-independent).
+        // The candidate with the name closest to a roster entry wins; use the canonical
+        // DB name so subsequent dedup logic resolves against the correct record.
+        for (candidate in player.candidates) {
+            val match = knownNames.find { isSimilar(candidate.name, it) }
+            if (match != null) {
+                return player.copy(name = match, score = candidate.score, candidates = emptyList())
+            }
+        }
+        // Step 4: web-roster alias resolver. Mirrors the backend's resolveOCRPlayer
+        // walk over candidates × resolveMemberAlias (Exact → Personal → Global → OCR).
+        if (rosterMembers.isNotEmpty()) {
+            val pairs = player.candidates.map { it.name to it.score }
+            val matched = tools.perry.lastwarscanner.ocr.RosterAliasResolver
+                .resolveCandidates(pairs, rosterMembers)
+            if (matched != null) {
+                val (m, chosen) = matched
+                return player.copy(name = m.member.name, score = chosen.second, candidates = emptyList())
+            }
+        }
+        return null
+    }
+
+    /**
+     * Returns true if the RGB pixel matches the given HSV colour range.
+     * Hue is normalised to [0, 1] (Android's [Color.RGBToHSV] returns 0–360).
+     */
+    private fun checkHsv(r: Int, g: Int, b: Int, config: tools.perry.lastwarscanner.ocr.HsvColorConfig): Boolean {
+        val hsv = FloatArray(3)
+        android.graphics.Color.RGBToHSV(r, g, b, hsv)
+        val h = hsv[0] / 360f
+        return h >= config.hMin && h <= config.hMax && hsv[1] >= config.sMin && hsv[2] >= config.vMin
+    }
+
+    /**
+     * Checks the single pixel at the layout's pre_ocr_hint position against the HSV colour
+     * range defined in the hint. Returns true if the pixel colour falls within the range,
+     * meaning this frame is plausibly showing the layout's screen.
+     */
+    private fun checkPreOcrHint(bitmap: android.graphics.Bitmap, hint: tools.perry.lastwarscanner.ocr.PreOcrHint): Boolean {
+        val x = (hint.xHint * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+        val y = (hint.yHint * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+        val pixel = bitmap.getPixel(x, y)
+        val config = tools.perry.lastwarscanner.ocr.HsvColorConfig(
+            hMin = hint.hsvHMin, hMax = hint.hsvHMax, sMin = hint.hsvSMin, vMin = hint.hsvVMin
+        )
+        return checkHsv(android.graphics.Color.red(pixel), android.graphics.Color.green(pixel),
+            android.graphics.Color.blue(pixel), config)
+    }
+
     private fun isSimilar(name1: String, name2: String): Boolean {
         val distance = levenshtein(name1.lowercase(), name2.lowercase())
         return distance <= min(3, name1.length / 5 + 1)
@@ -351,6 +616,37 @@ class ScreenCaptureService : Service() {
             }
         }
         return dp[s1.length][s2.length]
+    }
+
+    /**
+     * Crops a player row from the captured bitmap and saves it as a JPEG in internal storage.
+     * Files are written to [filesDir]/row_crops/ with a deterministic name (sanitized player
+     * name + day), so repeated scans of the same player+day overwrite the previous crop.
+     *
+     * @return Absolute path of the saved file, or null if saving failed.
+     */
+    private fun saveRowCrop(bitmap: Bitmap, bounds: Rect, name: String, day: String): String? {
+        return try {
+            val padding = 8
+            val left   = (bounds.left   - padding).coerceIn(0, bitmap.width)
+            val top    = (bounds.top    - padding).coerceIn(0, bitmap.height)
+            val right  = (bounds.right  + padding).coerceIn(0, bitmap.width)
+            val bottom = (bounds.bottom + padding).coerceIn(0, bitmap.height)
+            val w = right - left
+            val h = bottom - top
+            if (w <= 0 || h <= 0) return null
+
+            val crop = Bitmap.createBitmap(bitmap, left, top, w, h)
+            val dir = File(filesDir, "row_crops").also { it.mkdirs() }
+            val safeName = name.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(48)
+            val file = File(dir, "${safeName}_${day}.jpg")
+            file.outputStream().use { crop.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+            crop.recycle()
+            file.absolutePath
+        } catch (e: Exception) {
+            Log.e(TAG, "saveRowCrop failed: ${e.message}")
+            null
+        }
     }
 
     /**

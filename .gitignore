@@ -14,3 +14,4 @@
 
 # Local configuration
 local.properties
+/.claude/settings.local.json

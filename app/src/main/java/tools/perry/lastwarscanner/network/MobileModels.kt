@@ -40,7 +40,33 @@ data class LoginResponse(
     val manageMembers: Boolean
 )
 
-data class MemberSummary(val id: Int, val name: String, val rank: String)
+/**
+ * One alias the current user is allowed to see for a member.
+ *
+ * [category] is one of `"personal"` (only the current user), `"global"`
+ * (every user), or `"ocr"` (every user; created by accepting an OCR-side
+ * suggestion). The backend filters out other users' personal aliases
+ * before the roster reaches the device — see `loadMobileRoster` in the
+ * alliance-manager.
+ */
+data class AliasEntry(val alias: String, val category: String)
+
+/**
+ * One member of the alliance roster as served by `/api/mobile/members`.
+ *
+ * [aliases] carries the rows the current user is permitted to see
+ * (their own personals + every global + every OCR alias). The scanner's
+ * RosterAliasResolver runs the same Exact → Personal → Global → OCR
+ * lookup the backend does in `resolveMemberAlias` so on-device
+ * disambiguation matches server-side behaviour. See the Consumer
+ * Contract section of lastwar-screen-definitions/README.md.
+ */
+data class MemberSummary(
+    val id: Int,
+    val name: String,
+    val rank: String,
+    val aliases: List<AliasEntry> = emptyList()
+)
 
 data class PreviewMatch(
     val originalName: String,
@@ -80,8 +106,8 @@ object Category {
 
 object DayMapping {
     /**
-     * Maps the display names used by OcrParser / LayoutRegistry to the backend
-     * category strings expected by /api/mobile/preview and /api/mobile/commit.
+     * Maps the display names used by OcrParser to the backend category strings
+     * expected by /api/mobile/preview and /api/mobile/commit.
      */
     val toBackendKey: Map<String, String> = mapOf(
         "Mon"   to "monday",
@@ -93,8 +119,19 @@ object DayMapping {
         "Power" to "power"
     )
 
-    /** Categories present locally that have no mobile API commit path. */
-    val skipped: Set<String> = setOf("Kills", "Donation")
+    /** Categories stored locally that have no mobile API commit path. Includes both
+     *  current YAML-style keys and legacy display-name keys for backwards compatibility. */
+    val skipped: Set<String> = setOf(
+        // Legacy keys
+        "Kills", "Donation",
+        // Current YAML category keys
+        "kills", "donation_daily", "donation_weekly",
+        "weekly",
+        "mutual_assistance_daily", "mutual_assistance_weekly", "mutual_assistance_season",
+        "siege_daily", "siege_weekly", "siege_season",
+        "rare_soil_war_daily", "rare_soil_war_weekly", "rare_soil_war_season",
+        "defeat_daily", "defeat_weekly", "defeat_season",
+    )
 
     /** Ordered list of display names shown in the day selector spinner. */
     val syncableDisplayNames: List<String> = listOf("Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Power")

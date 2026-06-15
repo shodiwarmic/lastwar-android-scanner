@@ -48,17 +48,8 @@ class AllianceApiClient(private val session: SessionManager) {
     suspend fun getMembers(): Result<List<MemberSummary>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val json = getJson(endpoint("/api/mobile/members"))
-                val arr = json.getJSONArray("members")
-                List(arr.length()) { i ->
-                    arr.getJSONObject(i).run {
-                        MemberSummary(
-                            id = getInt("id"),
-                            name = getString("name"),
-                            rank = optString("rank", "")
-                        )
-                    }
-                }
+                val arr = getJsonArray(endpoint("/api/mobile/members"))
+                List(arr.length()) { i -> parseMember(arr.getJSONObject(i)) }
             }
         }
 
@@ -124,13 +115,21 @@ class AllianceApiClient(private val session: SessionManager) {
 
     // ── JSON parsing helpers ──────────────────────────────────────────────────
 
-    private fun parsePreviewResponse(json: JSONObject): PreviewResponse {
-        fun parseMember(obj: JSONObject) = MemberSummary(
+    private fun parseMember(obj: JSONObject): MemberSummary {
+        val aliasesArr = obj.optJSONArray("aliases") ?: JSONArray()
+        val aliases = List(aliasesArr.length()) { i ->
+            val a = aliasesArr.getJSONObject(i)
+            AliasEntry(alias = a.getString("alias"), category = a.optString("category", ""))
+        }
+        return MemberSummary(
             id = obj.getInt("id"),
             name = obj.getString("name"),
-            rank = obj.optString("rank", "")
+            rank = obj.optString("rank", ""),
+            aliases = aliases
         )
+    }
 
+    private fun parsePreviewResponse(json: JSONObject): PreviewResponse {
         fun parseMatch(obj: JSONObject): PreviewMatch {
             val memberObj = if (!obj.isNull("matched_member")) obj.optJSONObject("matched_member") else null
             return PreviewMatch(
@@ -172,6 +171,9 @@ class AllianceApiClient(private val session: SessionManager) {
     private fun getJson(url: String): JSONObject =
         readResponse(open(url, "GET", session.getToken()))
 
+    private fun getJsonArray(url: String): JSONArray =
+        readResponseArray(open(url, "GET", session.getToken()))
+
     private fun open(url: String, method: String, token: String?): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
@@ -193,6 +195,22 @@ class AllianceApiClient(private val session: SessionManager) {
                 throw HttpException(code, msg)
             }
             return JSONObject(raw)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun readResponseArray(conn: HttpURLConnection): JSONArray {
+        try {
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.readText() ?: "[]"
+            if (code !in 200..299) {
+                val err = runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
+                val msg = err.optString("message", "HTTP $code")
+                throw HttpException(code, msg)
+            }
+            return JSONArray(raw)
         } finally {
             conn.disconnect()
         }

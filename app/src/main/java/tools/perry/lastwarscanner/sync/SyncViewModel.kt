@@ -34,7 +34,9 @@ sealed class SyncState {
         val preview: PreviewResponse,
         /** Maps original_name → manually selected member_id. */
         val resolutions: Map<String, Int>,
-        val weekDate: String
+        val weekDate: String,
+        /** Maps original_name → absolute path of the row snapshot JPEG (may be null per entry). */
+        val snapshotPaths: Map<String, String?> = emptyMap()
     ) : SyncState()
     object Committing : SyncState()
     data class Success(val response: CommitResponse) : SyncState()
@@ -67,10 +69,16 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            val entries = withContext(Dispatchers.IO) {
-                db.playerScoreDao().getLatestScoresForDay(day)
+            val (entries, snapshotPaths) = withContext(Dispatchers.IO) {
+                // The DB stores entries using the backend category key (e.g. "wednesday").
+                // Fall back to the legacy display key (e.g. "Wed") for any data that was
+                // scanned before the YAML category IDs were adopted.
+                val dbRows = db.playerScoreDao().getLatestScoresForDay(category)
+                    .ifEmpty { db.playerScoreDao().getLatestScoresForDay(day) }
                     .filter { it.day !in DayMapping.skipped }
-                    .map { ScanEntry(name = it.name, score = it.score, category = category) }
+                val scanEntries = dbRows.map { ScanEntry(name = it.name, score = it.score, category = category) }
+                val paths = dbRows.associate { it.name to it.rowSnapshotPath }
+                scanEntries to paths
             }
 
             if (entries.isEmpty()) {
@@ -87,7 +95,8 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                     _state.value = SyncState.AwaitingReview(
                         preview = preview,
                         resolutions = emptyMap(),
-                        weekDate = weekDate
+                        weekDate = weekDate,
+                        snapshotPaths = snapshotPaths
                     )
                 },
                 onFailure = { e -> _state.value = mapError(e) }

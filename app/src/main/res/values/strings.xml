@@ -78,4 +78,19 @@
     <string name="review_picker_title">Assign member for:\n%1$s</string>
     <string name="review_picker_search_hint">Search members\u2026</string>
     <string name="arrow_right">→</string>
+
+    <!-- MainActivity redesign -->
+    <string name="hint_search_members">Search members…</string>
+    <string name="member_count_format">%1$d members</string>
+    <string name="sort_name_asc">Name ↑</string>
+    <string name="sort_name_desc">Name ↓</string>
+    <string name="sort_recent">Recent</string>
+    <string name="btn_sort">Sort</string>
+
+    <!-- Roster refresh -->
+    <string name="btn_refresh_roster_empty">Refresh Roster</string>
+    <string name="btn_refresh_roster">Refresh Roster (%1$d members)</string>
+    <string name="roster_refresh_success">Roster updated: %1$d members</string>
+    <string name="roster_refresh_failed">Roster refresh failed: %1$s</string>
+    <string name="roster_refreshing">Refreshing roster\u2026</string>
 </resources>

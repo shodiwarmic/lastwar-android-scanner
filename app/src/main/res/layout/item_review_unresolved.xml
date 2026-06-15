@@ -6,6 +6,17 @@
     android:paddingHorizontal="12dp"
     android:paddingVertical="8dp">
 
+    <!-- Row snapshot from the original screenshot (rank → score). Hidden when unavailable. -->
+    <ImageView
+        android:id="@+id/ivRowSnapshot"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_marginBottom="6dp"
+        android:scaleType="fitStart"
+        android:adjustViewBounds="false"
+        android:background="#11000000"
+        android:visibility="gone" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

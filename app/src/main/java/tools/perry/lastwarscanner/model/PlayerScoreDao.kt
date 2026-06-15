@@ -60,10 +60,19 @@ interface PlayerScoreDao {
      * the sync payload.
      */
     @Query("""
-        SELECT id, name, MAX(score) as score, day, timestamp FROM player_scores
+        SELECT id, name, MAX(score) as score, day, MAX(timestamp) as timestamp,
+               MAX(rowSnapshotPath) as rowSnapshotPath
+        FROM player_scores
         WHERE day = :day
         GROUP BY name
         ORDER BY name ASC
     """)
     fun getLatestScoresForDay(day: String): List<PlayerScoreEntity>
+
+    /**
+     * Updates the row snapshot path on all entries for a given player + day.
+     * Called when a repeated scan confirms the same score but we have a fresh crop.
+     */
+    @Query("UPDATE player_scores SET rowSnapshotPath = :path WHERE name = :name AND day = :day")
+    fun updateSnapshotPath(name: String, day: String, path: String)
 }

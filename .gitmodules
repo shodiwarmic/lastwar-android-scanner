@@ -1,0 +1,3 @@
+[submodule "app/src/main/assets/screen_definitions"]
+	path = app/src/main/assets/screen_definitions
+	url = https://github.com/shodiwarmic/lastwar-screen-definitions

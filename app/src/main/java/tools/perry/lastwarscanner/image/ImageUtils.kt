@@ -6,26 +6,15 @@ import android.graphics.Rect
 import androidx.core.graphics.get
 
 /**
- * Utility class for image processing tasks, such as color detection and percentage calculation
- * in specific regions of a bitmap.
+ * Utility class for image processing tasks: pixel sampling and percentage
+ * calculation over a region of a bitmap.
+ *
+ * Per-colour matchers (orange/white fallbacks) live on the data classes
+ * loaded from `screen_definitions/constants.yaml` via
+ * [tools.perry.lastwarscanner.ocr.ConstantsLoader] —
+ * call `constants.orangeRgb.matches(r, g, b)` etc. directly.
  */
 object ImageUtils {
-
-    /**
-     * Checks if a given RGB color is considered "orange" according to predefined thresholds.
-     * Used for detecting active tabs in certain screen layouts.
-     */
-    fun isOrange(r: Int, g: Int, b: Int): Boolean {
-        return r > 180 && g in 80..200 && b < 120 && (r > g + 20)
-    }
-
-    /**
-     * Checks if a given RGB color is considered "white" according to predefined thresholds.
-     * Used for detecting active tabs in certain screen layouts.
-     */
-    fun isWhite(r: Int, g: Int, b: Int): Boolean {
-        return r > 215 && g > 215 && b > 215
-    }
 
     /**
      * Checks if a region contains a significant amount of a specific color.
