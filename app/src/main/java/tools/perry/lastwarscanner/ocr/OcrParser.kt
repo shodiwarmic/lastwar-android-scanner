@@ -56,7 +56,7 @@ class OcrParser {
      * substring match would falsely fire on adjacent OCR noise (e.g. "STRENGTH"
      * appearing in any token would match the whole signal).
      */
-    private fun signalMatches(signal: String, tokens: Set<String>): Boolean {
+    internal fun signalMatches(signal: String, tokens: Set<String>): Boolean {
         val words = signal.lowercase()
             .split(Regex("[^a-z0-9]+"))
             .filter { it.isNotEmpty() }
@@ -480,10 +480,36 @@ class OcrParser {
                 lastNumStr = spanCandidates[0].second   // default: smallest score
                 nameRaw    = spanCandidates[0].first    // already cleaned
             } else {
-                // Last token is a pure number — strip non-digits to get score.
-                lastNumStr    = lastToken.replace(Regex("[^0-9]"), "")
-                nameRaw       = tokens.dropLast(1).joinToString(" ")
-                spanCandidates = emptyList()
+                // Last token is a pure number. Validate comma grouping; if malformed
+                // (e.g. OCR prepended a rank digit or noise — "543244,223,000" instead
+                // of "44,223,000"), scan for all valid comma-grouped suffixes and let
+                // Pass 2 resolve using adjacent-row scores, same as the letter branch.
+                val patternBody = ConstantsLoader.cached()?.crashTokens?.scoreSuffixPattern
+                    ?: """\d{1,3}(?:,\d{3})+"""
+                val scorePattern = Regex("^$patternBody$")
+                if (scorePattern.matches(lastToken)) {
+                    lastNumStr     = lastToken.replace(",", "")
+                    nameRaw        = tokens.dropLast(1).joinToString(" ")
+                    spanCandidates = emptyList()
+                } else {
+                    // Malformed token — scan from position 1 for all valid suffixes.
+                    // The digits before the valid suffix (e.g. "5432" in "543244,223,000")
+                    // were originally part of the player name, merged into the score by OCR.
+                    // Append them directly to the name tokens so the full name is recovered.
+                    val nameTokensBase = tokens.dropLast(1).joinToString(" ")
+                    val candidates = (1 until lastToken.length).mapNotNull { i ->
+                        val suffix = lastToken.substring(i)
+                        if (!scorePattern.matches(suffix)) return@mapNotNull null
+                        val candidateName = cleanName(nameTokensBase + lastToken.substring(0, i))
+                        if (candidateName.isEmpty()) return@mapNotNull null
+                        candidateName to suffix.replace(",", "")
+                    }.sortedBy { it.second.toLongOrNull() ?: Long.MAX_VALUE }
+                    Log.d(TAG, "  spanning-line malformed score token=\"$lastToken\" → ${candidates.size} suffix candidates")
+                    if (candidates.isEmpty()) continue
+                    lastNumStr     = candidates[0].second
+                    nameRaw        = candidates[0].first  // already cleaned
+                    spanCandidates = candidates
+                }
             }
 
             val value = if (spanCandidates.isEmpty()) lastNumStr.toLongOrNull() ?: continue
@@ -516,16 +542,21 @@ class OcrParser {
                     val last = s.indexOfLast { it.isDigit() }
                     if (last >= 0 && last < s.length - 1) s.substring(0, last + 1) else s
                 }
-            val candidates = crashSplits(preprocessed)
-            if (candidates.isNotEmpty()) {
-                val cleanName = cleanName(candidates[0].first)
-                val scoreValue = candidates[0].second.toLongOrNull() ?: 0L
-                if (cleanName.isNotEmpty() && scoreValue >= layout.rowClustering.minScore) {
+            val rawCandidates = crashSplits(preprocessed)
+            if (rawCandidates.isNotEmpty()) {
+                // Apply cleanName to every candidate so ScreenCaptureService can do
+                // exact/fuzzy/roster lookups on clean names for all crash-token splits,
+                // not just the default (index 0).
+                val candidates = rawCandidates
+                    .map { (rawName, score) -> cleanName(rawName) to score }
+                    .filter { it.first.isNotEmpty() }
+                val scoreValue = candidates.firstOrNull()?.second?.toLongOrNull() ?: 0L
+                if (candidates.isNotEmpty() && scoreValue >= layout.rowClustering.minScore) {
                     val rowBounds = sorted.fold(null as Rect?) { acc, line ->
                         if (acc == null) Rect(line.left, line.top, line.right, line.bottom)
                         else acc.also { it.union(line.boundingBox) }
                     }
-                    rawRows.add(RawRow(cleanName, candidates[0].second, candidates, rowBounds))
+                    rawRows.add(RawRow(candidates[0].first, candidates[0].second, candidates, rowBounds))
                 }
             }
         }
@@ -787,6 +818,19 @@ class OcrParser {
                 val prefix = text.substring(0, i).trim()
                 if (prefix.any { it.isLetter() } && !prefix.contains(',')) {
                     splits.add(prefix to suffix.replace(",", ""))
+                }
+                // OCR sometimes misreads the leading '1' of a score as 'i' or 'l'
+                // (e.g. "ShodiWarmici2,142,000" when the real score is "12,142,000").
+                // When suffix matches AND the last prefix char is 'i'/'l', also generate
+                // a candidate treating that char as '1' prepended to the score.
+                if (i > 1 && text[i - 1].lowercaseChar() in setOf('i', 'l')) {
+                    val extSuffix = "1" + suffix
+                    if (scorePattern.matches(extSuffix)) {
+                        val extPrefix = text.substring(0, i - 1).trim()
+                        if (extPrefix.any { it.isLetter() } && !extPrefix.contains(',')) {
+                            splits.add(extPrefix to extSuffix.replace(",", ""))
+                        }
+                    }
                 }
             }
             return splits.sortedBy { it.second.toLongOrNull() ?: Long.MAX_VALUE }

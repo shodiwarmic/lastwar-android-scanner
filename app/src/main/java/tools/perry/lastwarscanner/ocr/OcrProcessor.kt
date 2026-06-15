@@ -37,16 +37,29 @@ class OcrProcessor : Closeable {
     fun process(
         image: InputImage,
         onSuccess: (List<OcrLine>) -> Unit,
-        onError: (Exception) -> Unit
+        onError: (Exception) -> Unit,
+        enhancedImage: InputImage? = null
     ) {
-        // We run all recognizers in parallel to catch all languages
-        val tasks = listOf(
-            latinRecognizer.process(image),
-            koreanRecognizer.process(image),
-            chineseRecognizer.process(image),
-            japaneseRecognizer.process(image),
-            devanagariRecognizer.process(image)
-        )
+        // Run all recognizers in parallel across both images (if provided) to maximise recall.
+        // The enhanced (grayscale+contrast) image helps on low-contrast rows; the original
+        // preserves colour fidelity for rows where ML Kit already succeeds. Duplicate lines
+        // are collapsed by mergeOverlappingLines.
+        val tasks = buildList {
+            addAll(listOf(
+                latinRecognizer.process(image),
+                koreanRecognizer.process(image),
+                chineseRecognizer.process(image),
+                japaneseRecognizer.process(image),
+                devanagariRecognizer.process(image)
+            ))
+            if (enhancedImage != null) addAll(listOf(
+                latinRecognizer.process(enhancedImage),
+                koreanRecognizer.process(enhancedImage),
+                chineseRecognizer.process(enhancedImage),
+                japaneseRecognizer.process(enhancedImage),
+                devanagariRecognizer.process(enhancedImage)
+            ))
+        }
 
         Tasks.whenAllComplete(tasks)
             .addOnSuccessListener { completedTasks ->

@@ -231,6 +231,7 @@ class ScreenCaptureService : Service() {
 
         serviceScope.launch(Dispatchers.IO) {
             var bitmap: Bitmap? = null
+            var ocrBitmap: Bitmap? = null
             try {
                 val planes = image.planes
                 val buffer = planes[0].buffer
@@ -256,7 +257,9 @@ class ScreenCaptureService : Service() {
                     return@launch
                 }
 
+                ocrBitmap = enhanceForOcr(bitmap)
                 val inputImage = InputImage.fromBitmap(bitmap, 0)
+                val enhancedImage = InputImage.fromBitmap(ocrBitmap, 0)
                 ocrProcessor.process(inputImage, onSuccess = { lines ->
                     val result = ocrParser.parse(lines, bitmap.width, bitmap.height, screenLayouts)
                     if (result.isConfirmedRankingPage) {
@@ -441,29 +444,34 @@ class ScreenCaptureService : Service() {
                                 }
                                 sendResultBroadcast(activeDay)
                                 isProcessing.set(false)
+                                ocrBitmap?.recycle()
                                 bitmap.recycle()
                             }
                         } else {
                             sendScanningBroadcast(false)
                             isProcessing.set(false)
+                            ocrBitmap.recycle()
                             bitmap.recycle()
                         }
                     } else {
                         sendScanningBroadcast(false)
                         isProcessing.set(false)
+                        ocrBitmap.recycle()
                         bitmap.recycle()
                     }
-                }, onError = { exception -> 
+                }, onError = { exception ->
                     Log.e(TAG, "OCR Error: ${exception.message}")
                     sendScanningBroadcast(false)
                     isProcessing.set(false)
+                    ocrBitmap?.recycle()
                     bitmap.recycle()
-                })
+                }, enhancedImage = enhancedImage)
             } catch (e: Exception) {
                 Log.e(TAG, "Capture Error: ${e.message}")
                 try { image.close() } catch (_: Exception) {}
                 sendScanningBroadcast(false)
                 isProcessing.set(false)
+                ocrBitmap?.recycle()
                 bitmap?.recycle()
             }
         }
@@ -488,6 +496,28 @@ class ScreenCaptureService : Service() {
         intent.putExtra(EXTRA_DAY, day)
         intent.putExtra(EXTRA_SCANNING, false)
         sendBroadcast(intent)
+    }
+
+    /**
+     * Returns a grayscale + contrast-enhanced copy of [src] for better OCR on low-contrast
+     * rows (e.g. rank-2 light-blue-background / medium-blue-text). The original bitmap is
+     * kept unchanged for colour-based tab detection.
+     */
+    private fun enhanceForOcr(src: Bitmap): Bitmap {
+        val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(out)
+        val paint = android.graphics.Paint()
+        val cm = android.graphics.ColorMatrix()
+        cm.setSaturation(0f)
+        cm.postConcat(android.graphics.ColorMatrix(floatArrayOf(
+            1.6f, 0f,   0f,   0f, -80f,
+            0f,   1.6f, 0f,   0f, -80f,
+            0f,   0f,   1.6f, 0f, -80f,
+            0f,   0f,   0f,   1f,   0f,
+        )))
+        paint.colorFilter = android.graphics.ColorMatrixColorFilter(cm)
+        canvas.drawBitmap(src, 0f, 0f, paint)
+        return out
     }
 
     /**
