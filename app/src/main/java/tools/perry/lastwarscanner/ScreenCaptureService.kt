@@ -257,9 +257,13 @@ class ScreenCaptureService : Service() {
                     return@launch
                 }
 
+                // OCR runs on the contrast-adjusted image only — matching the cloud OCR service
+                // (lastwar-ocr-service run_ocr → enhance_for_ocr). enhanceForOcr now applies the same
+                // per-channel autocontrast(cutoff=1) the cloud uses: it preserves colour and cleanly
+                // separates the low-contrast rows (top-3 ranks, pinned self-row). Single pass
+                // (5 recognizers) keeps it fast. The original bitmap is kept for colour tab detection.
                 ocrBitmap = enhanceForOcr(bitmap)
-                val inputImage = InputImage.fromBitmap(bitmap, 0)
-                val enhancedImage = InputImage.fromBitmap(ocrBitmap, 0)
+                val inputImage = InputImage.fromBitmap(ocrBitmap, 0)
                 ocrProcessor.process(inputImage, onSuccess = { lines ->
                     val result = ocrParser.parse(lines, bitmap.width, bitmap.height, screenLayouts)
                     if (result.isConfirmedRankingPage) {
@@ -347,7 +351,9 @@ class ScreenCaptureService : Service() {
                                 val rosterMembers = RosterCache.getMembers(applicationContext)
                                 val rosterNames = rosterMembers.map { it.name }
 
-                                for (player in result.players) {
+                                var prevScore = -1L  // last accepted row's score; the leaderboard is score-descending
+                                for (idx in result.players.indices) {
+                                    val player = result.players[idx]
                                     // Resolve crash-token ambiguity: if the row had multiple
                                     // valid name/score splits, find the one that best matches
                                     // an existing DB record (or a roster alias) before committing.
@@ -357,68 +363,59 @@ class ScreenCaptureService : Service() {
 
                                     val scoreLong = resolvedPlayer.score.toLongOrNull() ?: continue
 
-                                    // Lookup 1: exact name match
-                                    var latest = db.playerScoreDao().getLatestPlayerEntry(resolvedPlayer.name)
+                                    // Score-sanity: the list is score-descending, so a score many
+                                    // times the row above it is a digit-inflation misread (e.g.
+                                    // 4,849,644 read as 48,496,441). Skip that reading so the sync's
+                                    // GROUP BY MAX(score) can't lock in the inflated value; the player
+                                    // is recovered from a clean frame. 8x clears legit gaps and the
+                                    // pinned own-row (~3x), which is last and never checked.
+                                    if (idx < result.players.size - 1 && prevScore > 0 && scoreLong > prevScore * 8) {
+                                        Log.d(TAG, "  score-sanity skip: \"${resolvedPlayer.name}\" score=$scoreLong >> rowAbove=$prevScore")
+                                        continue
+                                    }
+                                    prevScore = scoreLong
 
-                                    // Lookup 2: score match + fuzzy name (handles slight OCR
-                                    // variants when the score hasn't changed)
-                                    if (latest == null) {
-                                        val playersWithSameScore = db.playerScoreDao().getPlayersByScore(scoreLong)
-                                        for (candidate in playersWithSameScore) {
-                                            if (isSimilar(resolvedPlayer.name, candidate.name)) {
-                                                latest = candidate
-                                                break
+                                    // Identity: resolve to a roster member FIRST (the canonical
+                                    // dedup key), so two garbled OCR reads of the same member collapse
+                                    // under one name in the GROUP BY sync. Exact/alias first, then
+                                    // fuzzy against roster names.
+                                    var canonicalName = resolvedPlayer.name
+                                    if (rosterMembers.isNotEmpty()) {
+                                        val aliasMatch = tools.perry.lastwarscanner.ocr.RosterAliasResolver
+                                            .resolve(resolvedPlayer.name, rosterMembers)
+                                        val rosterName = aliasMatch?.member?.name
+                                            ?: uniqueRosterMatch(resolvedPlayer.name, rosterNames)
+                                        if (rosterName != null) {
+                                            canonicalName = rosterName
+                                            Log.d(TAG, "  roster ${aliasMatch?.matchType ?: "fuzzy"}: \"${resolvedPlayer.name}\" → \"$rosterName\"")
+                                        }
+                                    }
+
+                                    // Existing DB row for this identity (keyed on canonical name).
+                                    var latest = db.playerScoreDao().getLatestPlayerEntry(canonicalName)
+
+                                    // Fallback for rows that matched no roster member: keep the
+                                    // prior score-match then DB-name-fuzzy heuristics so unknown /
+                                    // not-yet-rostered players still merge across frames.
+                                    if (latest == null && canonicalName == resolvedPlayer.name) {
+                                        val byScore = db.playerScoreDao().getPlayersByScore(scoreLong)
+                                            .firstOrNull { isSimilar(resolvedPlayer.name, it.name) }
+                                        if (byScore != null) {
+                                            latest = byScore
+                                            canonicalName = byScore.name
+                                        } else {
+                                            val knownMatch = knownNames.firstOrNull { isSimilar(resolvedPlayer.name, it) }
+                                            if (knownMatch != null) {
+                                                latest = db.playerScoreDao().getLatestPlayerEntry(knownMatch)
+                                                canonicalName = if (
+                                                    resolvedPlayer.name.length < knownMatch.length &&
+                                                    knownMatch.contains(resolvedPlayer.name)
+                                                ) resolvedPlayer.name else knownMatch
                                             }
                                         }
                                     }
 
-                                    // Lookup 3: fuzzy name match against the full DB roster —
-                                    // catches OCR noise variants when the score has also changed.
-                                    // Prefer the OCR name when it is shorter and the DB name
-                                    // contains it — this corrects stale dirty names (e.g. a
-                                    // previously stored "R3cklessBadger1" when the clean OCR
-                                    // result is "R3cklessBadger").
-                                    var canonicalName = resolvedPlayer.name
-                                    if (latest == null && knownNames.isNotEmpty()) {
-                                        val match = knownNames.find { isSimilar(resolvedPlayer.name, it) }
-                                        if (match != null) {
-                                            latest = db.playerScoreDao().getLatestPlayerEntry(match)
-                                            canonicalName = if (
-                                                resolvedPlayer.name.length < match.length &&
-                                                match.contains(resolvedPlayer.name)
-                                            ) resolvedPlayer.name else match
-                                        }
-                                    }
-
-                                    // Lookup 4: web-roster alias resolver — mirrors the backend's
-                                    // resolveMemberAlias hierarchy (Exact → Personal → Global → OCR).
-                                    // This runs BEFORE fuzzy so a known alias always wins over a
-                                    // typo-distance heuristic.
-                                    if (latest == null && rosterMembers.isNotEmpty()) {
-                                        val aliasMatch = tools.perry.lastwarscanner.ocr.RosterAliasResolver
-                                            .resolve(resolvedPlayer.name, rosterMembers)
-                                        if (aliasMatch != null) {
-                                            latest = db.playerScoreDao().getLatestPlayerEntry(aliasMatch.member.name)
-                                            canonicalName = aliasMatch.member.name
-                                            Log.d(TAG, "  alias match: \"${resolvedPlayer.name}\" → \"${canonicalName}\" (${aliasMatch.matchType})")
-                                        }
-                                    }
-
-                                    // Lookup 5: fuzzy match against the web roster — last-chance
-                                    // OCR-noise fallback for names that aren't an exact alias hit.
-                                    if (latest == null && rosterNames.isNotEmpty()) {
-                                        val match = rosterNames.find { isSimilar(resolvedPlayer.name, it) }
-                                        if (match != null) {
-                                            latest = db.playerScoreDao().getLatestPlayerEntry(match)
-                                            canonicalName = if (
-                                                resolvedPlayer.name.length < match.length &&
-                                                match.contains(resolvedPlayer.name)
-                                            ) resolvedPlayer.name else match
-                                        }
-                                    }
-
-                                    val nameChanged = latest != null && canonicalName.length < latest.name.length && latest.name.contains(canonicalName)
-                                    val finalName = if (nameChanged) canonicalName else (latest?.name ?: canonicalName)
+                                    val finalName = canonicalName
 
                                     // Always save/refresh the crop so the review screen has a
                                     // current image even when the score hasn't changed.
@@ -426,9 +423,9 @@ class ScreenCaptureService : Service() {
                                         saveRowCrop(bitmap, bounds, finalName, activeDay)
                                     }
 
-                                    Log.d(TAG, "player: ocr=\"${resolvedPlayer.name}\" score=${resolvedPlayer.score} → canonical=\"$canonicalName\" finalName=\"$finalName\" scoreLong=$scoreLong nameChanged=$nameChanged latestName=\"${latest?.name}\" latestScore=${latest?.score}")
+                                    Log.d(TAG, "player: ocr=\"${resolvedPlayer.name}\" → final=\"$finalName\" score=$scoreLong latestName=\"${latest?.name}\" latestScore=${latest?.score}")
 
-                                    if (latest == null || latest.score != scoreLong || nameChanged) {
+                                    if (latest == null || latest.score != scoreLong) {
                                         Log.d(TAG, "  → INSERT name=\"$finalName\" score=$scoreLong day=$activeDay")
                                         db.playerScoreDao().insert(PlayerScoreEntity(
                                             name = finalName,
@@ -450,13 +447,13 @@ class ScreenCaptureService : Service() {
                         } else {
                             sendScanningBroadcast(false)
                             isProcessing.set(false)
-                            ocrBitmap.recycle()
+                            ocrBitmap?.recycle()
                             bitmap.recycle()
                         }
                     } else {
                         sendScanningBroadcast(false)
                         isProcessing.set(false)
-                        ocrBitmap.recycle()
+                        ocrBitmap?.recycle()
                         bitmap.recycle()
                     }
                 }, onError = { exception ->
@@ -465,7 +462,7 @@ class ScreenCaptureService : Service() {
                     isProcessing.set(false)
                     ocrBitmap?.recycle()
                     bitmap.recycle()
-                }, enhancedImage = enhancedImage)
+                }, enhancedImage = null)
             } catch (e: Exception) {
                 Log.e(TAG, "Capture Error: ${e.message}")
                 try { image.close() } catch (_: Exception) {}
@@ -499,25 +496,76 @@ class ScreenCaptureService : Service() {
     }
 
     /**
-     * Returns a grayscale + contrast-enhanced copy of [src] for better OCR on low-contrast
-     * rows (e.g. rank-2 light-blue-background / medium-blue-text). The original bitmap is
-     * kept unchanged for colour-based tab detection.
+     * Per-channel contrast stretch matching the cloud OCR service's
+     * `ImageOps.autocontrast(img, cutoff=1)` (lastwar-ocr-service app/utils/image_utils.py).
+     * For each of R/G/B independently it clips the lightest and darkest 1% of pixels, then
+     * linearly stretches the surviving range to 0–255. Colour is preserved (NOT grayscale):
+     * the top-3 rank rows (gold/silver/bronze) and the pinned self-player row use coloured
+     * text on coloured backgrounds that differ mainly in the blue channel, and stretching per
+     * channel roughly doubles that separation so OCR reads the score. Grayscaling instead
+     * collapses that separation and erases the text (regressed to ~21/97). The original bitmap
+     * is kept unchanged for the colour-based tab detection.
      */
     private fun enhanceForOcr(src: Bitmap): Bitmap {
-        val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(out)
-        val paint = android.graphics.Paint()
-        val cm = android.graphics.ColorMatrix()
-        cm.setSaturation(0f)
-        cm.postConcat(android.graphics.ColorMatrix(floatArrayOf(
-            1.6f, 0f,   0f,   0f, -80f,
-            0f,   1.6f, 0f,   0f, -80f,
-            0f,   0f,   1.6f, 0f, -80f,
-            0f,   0f,   0f,   1f,   0f,
-        )))
-        paint.colorFilter = android.graphics.ColorMatrixColorFilter(cm)
-        canvas.drawBitmap(src, 0f, 0f, paint)
+        val w = src.width
+        val h = src.height
+        val pixels = IntArray(w * h)
+        src.getPixels(pixels, 0, w, 0, 0, w, h)
+
+        val histR = IntArray(256)
+        val histG = IntArray(256)
+        val histB = IntArray(256)
+        for (p in pixels) {
+            histR[(p ushr 16) and 0xFF]++
+            histG[(p ushr 8) and 0xFF]++
+            histB[p and 0xFF]++
+        }
+
+        val cutoff = pixels.size / 100   // 1% per PIL cutoff=1
+        val lutR = buildAutocontrastLut(histR, cutoff)
+        val lutG = buildAutocontrastLut(histG, cutoff)
+        val lutB = buildAutocontrastLut(histB, cutoff)
+
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            pixels[i] = (p and 0xFF000000.toInt()) or
+                (lutR[(p ushr 16) and 0xFF] shl 16) or
+                (lutG[(p ushr 8) and 0xFF] shl 8) or
+                lutB[p and 0xFF]
+        }
+
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        out.setPixels(pixels, 0, w, 0, 0, w, h)
         return out
+    }
+
+    /**
+     * Builds a 256-entry LUT that clips [cutoff] pixels from each tail of [hist] and linearly
+     * stretches the surviving [lo,hi] range to 0–255 — the per-channel core of PIL's
+     * autocontrast. Returns the identity map for a flat/degenerate channel.
+     */
+    private fun buildAutocontrastLut(hist: IntArray, cutoff: Int): IntArray {
+        var lo = 0
+        var acc = 0
+        for (v in 0..255) { acc += hist[v]; if (acc > cutoff) { lo = v; break } }
+        var hi = 255
+        acc = 0
+        for (v in 255 downTo 0) { acc += hist[v]; if (acc > cutoff) { hi = v; break } }
+
+        val lut = IntArray(256)
+        if (hi <= lo) {
+            for (v in 0..255) lut[v] = v
+        } else {
+            val scale = 255.0 / (hi - lo)
+            for (v in 0..255) {
+                lut[v] = when {
+                    v <= lo -> 0
+                    v >= hi -> 255
+                    else -> ((v - lo) * scale).toInt().coerceIn(0, 255)
+                }
+            }
+        }
+        return lut
     }
 
     /**
@@ -616,6 +664,26 @@ class ScreenCaptureService : Service() {
             }
         }
         return dp[s1.length][s2.length]
+    }
+
+    /**
+     * Returns the roster name that *uniquely and closely* matches [name], or null when the match
+     * is ambiguous or too far. Tighter than [isSimilar], and requires a single unambiguous best
+     * candidate so two different garbled OCR reads can't both snap onto the same member (which
+     * would silently drop a player). Bias is toward NOT merging: an unmatched read stays distinct
+     * — at worst a visible duplicate in the review screen, never a silently-lost player.
+     */
+    private fun uniqueRosterMatch(name: String, rosterNames: List<String>): String? {
+        val needle = name.lowercase()
+        val maxDist = minOf(2, name.length / 6 + 1)
+        val scored = rosterNames
+            .map { it to levenshtein(needle, it.lowercase()) }
+            .filter { it.second <= maxDist }
+            .sortedBy { it.second }
+        if (scored.isEmpty()) return null
+        // Require an unambiguous winner: the best must be strictly closer than the runner-up.
+        if (scored.size > 1 && scored[0].second == scored[1].second) return null
+        return scored[0].first
     }
 
     /**
