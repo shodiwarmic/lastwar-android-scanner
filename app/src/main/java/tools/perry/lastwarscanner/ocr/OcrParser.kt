@@ -357,9 +357,17 @@ class OcrParser {
 
         for (nameLine in nameColLines) {
             val nameMid = (nameLine.top + nameLine.bottom) / 2
+            // Overlap test, not containment. A name LINE box is taller than the score
+            // digits beside it (rank prefix "R3"/"R4", capitals, and descenders like j/y),
+            // so on a same-row layout the name extends a few px past the score box top and
+            // bottom. Requiring full containment within [top-upBand, bottom+downBand] (with
+            // downBand≈4px) drops every same-row name → empty names → rows discarded. The
+            // contract (README §"score_anchored") means "name falls in the band"; test that
+            // the name's vertical span intersects the band instead. Rows are ~170px apart vs
+            // a ~70px band, so adjacent rows and (down_band-guarded) subtitle rows stay out.
             val inBand = anchors.filter { anchor ->
-                nameLine.top    >= anchor.line.top    - upBand &&
-                nameLine.bottom <= anchor.line.bottom + downBand
+                nameLine.bottom >= anchor.line.top    - upBand &&
+                nameLine.top    <= anchor.line.bottom + downBand
             }
             if (inBand.isNotEmpty()) {
                 val closest = inBand.minByOrNull { anchor ->
