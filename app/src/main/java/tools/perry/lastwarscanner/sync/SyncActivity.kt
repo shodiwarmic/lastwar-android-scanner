@@ -294,6 +294,8 @@ class SyncActivity : AppCompatActivity() {
         sb.append("\n")
         sb.append(getString(R.string.sync_result_power, response.powerRecordsSaved))
         sb.append("\n")
+        sb.append(getString(R.string.sync_result_kills, response.killsRecordsSaved))
+        sb.append("\n")
         sb.append(getString(R.string.sync_result_aliases, response.aliasesSaved))
         if (response.errors.isNotEmpty()) {
             sb.append("\n\n")

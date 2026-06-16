@@ -91,6 +91,7 @@ data class CommitResponse(
     val message: String,
     val vsRecordsSaved: Int,
     val powerRecordsSaved: Int,
+    val killsRecordsSaved: Int,
     val aliasesSaved: Int,
     val errors: List<String>
 )
@@ -100,6 +101,7 @@ data class CommitResponse(
 object Category {
     val VS_DAYS = listOf("monday", "tuesday", "wednesday", "thursday", "friday", "saturday")
     const val POWER = "power"
+    const val KILLS = "kills"
 }
 
 // ── Day name mapping ──────────────────────────────────────────────────────────
@@ -116,16 +118,17 @@ object DayMapping {
         "Thur"  to "thursday",
         "Fri"   to "friday",
         "Sat"   to "saturday",
-        "Power" to "power"
+        "Power" to "power",
+        "Kills" to "kills"
     )
 
     /** Categories stored locally that have no mobile API commit path. Includes both
      *  current YAML-style keys and legacy display-name keys for backwards compatibility. */
     val skipped: Set<String> = setOf(
         // Legacy keys
-        "Kills", "Donation",
+        "Donation",
         // Current YAML category keys
-        "kills", "donation_daily", "donation_weekly",
+        "donation_daily", "donation_weekly",
         "weekly",
         "mutual_assistance_daily", "mutual_assistance_weekly", "mutual_assistance_season",
         "siege_daily", "siege_weekly", "siege_season",
@@ -134,5 +137,5 @@ object DayMapping {
     )
 
     /** Ordered list of display names shown in the day selector spinner. */
-    val syncableDisplayNames: List<String> = listOf("Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Power")
+    val syncableDisplayNames: List<String> = listOf("Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Power", "Kills")
 }
