@@ -1,5 +1,7 @@
 # Last War Scanner
 
+[![Build APK](https://github.com/shodiwarmic/lastwar-android-scanner/actions/workflows/build-apk.yml/badge.svg)](https://github.com/shodiwarmic/lastwar-android-scanner/actions/workflows/build-apk.yml)
+
 Last War Scanner is an Android utility designed to automate the collection of alliance ranking data from the game "Last War". It uses high-precision OCR (Optical Character Recognition) to capture player names and scores directly from your screen, compiling them into a sortable pivot table and allowing for easy CSV export.
 
 ## Features
@@ -9,7 +11,8 @@ Last War Scanner is an Android utility designed to automate the collection of al
     - **Daily Rankings**: Automatically detects and categorizes scores for Monday through Saturday.
     - **Strength Rankings**: Specifically handles Power, Kills, and Donation categories.
 - **Rhythmic Scanning with Visual Feedback**: A high-contrast magenta bar flashes at the top of the screen whenever a snapshot is taken, signaling when it's safe to scroll to the next page.
-- **Smart Name Resolution**: Includes a fuzzy-matching engine that automatically merges similar names (e.g., handling OCR typos like "gustavooo" vs "gustovooo") into a single consistent record.
+- **Smart Name Resolution**: Resolves scanned names against your alliance roster and merges OCR variants (e.g. "gustavooo" vs "gustovooo") into a single consistent record.
+- **Sync to the Web**: Upload scanned VS, Power, and Kills scores straight to your alliance-manager site, pairing OCR names to roster members on-device.
 - **Data Management**:
     - **Live Pivot Table**: View all member scores across all days and categories in a single consolidated view.
     - **Interactive Sorting**: Sort members by name or by specific day/category scores.
@@ -37,16 +40,17 @@ Last War Scanner is an Android utility designed to automate the collection of al
 - Overlay permission enabled for visual feedback.
 
 ### Build from Source
-1. Clone the repository.
+1. Clone the repository **with submodules**: `git clone --recurse-submodules …` (or run `git submodule update --init` after cloning) — the `screen_definitions` assets are a git submodule.
 2. Open in Android Studio.
 3. Build and deploy to your device.
 
 ## Technical Details
 
-- **OCR Engine**: Google ML Kit (Specialized models for Latin, Korean, Chinese, Japanese, and Devanagari).
+- **OCR Engine**: Google ML Kit (specialized models for Latin, Korean, Chinese, Japanese, and Devanagari), with per-channel autocontrast pre-processing for low-contrast rows.
+- **Screen Definitions**: YAML layout contract shared with the cloud OCR service via a git submodule.
 - **Database**: Room Persistence Library.
 - **Concurrency**: Kotlin Coroutines and Flow for reactive data updates.
-- **Fuzzy Matching**: Levenshtein Distance algorithm for name reconciliation.
+- **Name Reconciliation**: Resolves OCR names to your alliance roster (alias hierarchy), with Levenshtein fuzzy matching as a fallback.
 
 ## License
 
