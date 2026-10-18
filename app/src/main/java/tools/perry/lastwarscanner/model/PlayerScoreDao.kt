@@ -70,6 +70,22 @@ interface PlayerScoreDao {
     fun getLatestScoresForDay(day: String): List<PlayerScoreEntity>
 
     /**
+     * Every row of one category, for [DonationRows.latestPerGameDay]: a donation is sent per
+     * game day, which [getLatestScoresForDay]'s independent MAX(score) / MAX(timestamp) cannot
+     * express.
+     */
+    @Query("SELECT * FROM player_scores WHERE day = :day ORDER BY name ASC, timestamp ASC")
+    fun getScoresForDay(day: String): List<PlayerScoreEntity>
+
+    /** The latest row for one player in one category (the donation storage key). */
+    @Query("SELECT * FROM player_scores WHERE name = :name AND day = :day ORDER BY timestamp DESC, id DESC LIMIT 1")
+    fun getLatestEntryForDay(name: String, day: String): PlayerScoreEntity?
+
+    /** Advances an unchanged reading's time (and its crop, when there is a fresh one). */
+    @Query("UPDATE player_scores SET timestamp = :timestamp, rowSnapshotPath = COALESCE(:path, rowSnapshotPath) WHERE id = :id")
+    fun touch(id: Long, timestamp: Long, path: String?)
+
+    /**
      * Updates the row snapshot path on all entries for a given player + day.
      * Called when a repeated scan confirms the same score but we have a fresh crop.
      */

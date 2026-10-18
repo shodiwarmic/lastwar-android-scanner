@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tools.perry.lastwarscanner.model.AppDatabase
+import tools.perry.lastwarscanner.model.DonationRows
 import tools.perry.lastwarscanner.network.AliasMapping
 import tools.perry.lastwarscanner.network.AllianceApiClient
 import tools.perry.lastwarscanner.network.CommitRecord
@@ -43,6 +44,40 @@ sealed class SyncState {
     data class Error(val message: String, val canRetry: Boolean) : SyncState()
 }
 
+// ── Commit records ────
+
+/**
+ * The commit records for a reviewed preview: every automatic match, and every unresolved entry
+ * the user resolved. Each keeps the time the server echoed, so a reading is filed on the game
+ * day it was read even when the sync crosses the reset.
+ */
+internal fun buildCommitRecordsFor(state: SyncState.AwaitingReview): List<CommitRecord> {
+    val records = mutableListOf<CommitRecord>()
+    // Auto-matched entries
+    for (match in state.preview.matched) {
+        val member = match.matchedMember ?: continue
+        records += CommitRecord(
+            memberId = member.id,
+            originalName = match.originalName,
+            category = match.category,
+            score = match.score,
+            capturedAt = match.capturedAt
+        )
+    }
+    // Manually resolved entries
+    for (match in state.preview.unresolved) {
+        val memberId = state.resolutions[match.originalName] ?: continue
+        records += CommitRecord(
+            memberId = memberId,
+            originalName = match.originalName,
+            category = match.category,
+            score = match.score,
+            capturedAt = match.capturedAt
+        )
+    }
+    return records
+}
+
 // ── ViewModel ─────────────────────────────────────────────────────────────────
 
 class SyncViewModel(app: Application) : AndroidViewModel(app) {
@@ -64,19 +99,38 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _state.value = SyncState.LoadingPreview
             val category = DayMapping.toBackendKey[day]
-            if (category == null) {
+            if (category == null && day != DayMapping.DONATIONS) {
                 _state.value = SyncState.Error("Unknown day: $day", canRetry = false)
                 return@launch
             }
 
             val (entries, snapshotPaths) = withContext(Dispatchers.IO) {
+                if (day == DayMapping.DONATIONS) {
+                    // Both tabs, every game day still within the server's 30 days: one row per
+                    // name and game day, its own score and time (DonationRows), each sent with
+                    // the time it was read so the server files it on that game day.
+                    val now = System.currentTimeMillis()
+                    val dbRows = DonationRows.CATEGORIES.flatMap { cat ->
+                        DonationRows.latestPerGameDay(db.playerScoreDao().getScoresForDay(cat), now)
+                    }
+                    val scanEntries = dbRows.map {
+                        ScanEntry(name = it.name, score = it.score, category = it.day,
+                            capturedAt = DonationRows.capturedAt(it.timestamp))
+                    }
+                    return@withContext scanEntries to dbRows.associate { it.name to it.rowSnapshotPath }
+                }
                 // The DB stores entries using the backend category key (e.g. "wednesday").
                 // Fall back to the legacy display key (e.g. "Wed") for any data that was
                 // scanned before the YAML category IDs were adopted.
-                val dbRows = db.playerScoreDao().getLatestScoresForDay(category)
+                val dbRows = db.playerScoreDao().getLatestScoresForDay(category!!)
                     .ifEmpty { db.playerScoreDao().getLatestScoresForDay(day) }
                     .filter { it.day !in DayMapping.skipped }
-                val scanEntries = dbRows.map { ScanEntry(name = it.name, score = it.score, category = category) }
+                // captured_at dates a member stat on the server (VS days ignore it); the
+                // row's timestamp is its latest scan (private-docs 217, item 3).
+                val scanEntries = dbRows.map {
+                    ScanEntry(name = it.name, score = it.score, category = category,
+                        capturedAt = DonationRows.capturedAt(it.timestamp))
+                }
                 val paths = dbRows.associate { it.name to it.rowSnapshotPath }
                 scanEntries to paths
             }
@@ -124,7 +178,7 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         val current = _state.value as? SyncState.AwaitingReview ?: return
         viewModelScope.launch {
             _state.value = SyncState.Committing
-            val records = buildCommitRecords(current)
+            val records = buildCommitRecordsFor(current)
             val request = CommitRequest(
                 weekDate = current.weekDate,
                 records = records,
@@ -161,31 +215,6 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private fun buildCommitRecords(state: SyncState.AwaitingReview): List<CommitRecord> {
-        val records = mutableListOf<CommitRecord>()
-        // Auto-matched entries
-        for (match in state.preview.matched) {
-            val member = match.matchedMember ?: continue
-            records += CommitRecord(
-                memberId = member.id,
-                originalName = match.originalName,
-                category = match.category,
-                score = match.score
-            )
-        }
-        // Manually resolved entries
-        for (match in state.preview.unresolved) {
-            val memberId = state.resolutions[match.originalName] ?: continue
-            records += CommitRecord(
-                memberId = memberId,
-                originalName = match.originalName,
-                category = match.category,
-                score = match.score
-            )
-        }
-        return records
-    }
-
     private fun mapError(e: Throwable): SyncState.Error {
         return when (e) {
             is AllianceApiClient.HttpException -> when (e.code) {
@@ -197,10 +226,8 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                     "Your account does not have VS import permission.",
                     canRetry = false
                 )
-                400 -> SyncState.Error(
-                    "Date format error — please reinstall or report this bug.",
-                    canRetry = false
-                )
+                // The server says what it refused (a bad date, an unknown field…); show its words.
+                400 -> SyncState.Error(e.serverMessage, canRetry = false)
                 in 500..599 -> SyncState.Error(
                     "Server error (HTTP ${e.code}). Try again shortly.",
                     canRetry = true

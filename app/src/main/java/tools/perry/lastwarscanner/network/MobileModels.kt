@@ -4,7 +4,9 @@ package tools.perry.lastwarscanner.network
 
 data class LoginRequest(val username: String, val password: String)
 
-data class ScanEntry(val name: String, val score: Long, val category: String)
+/** [capturedAt]: RFC 3339 UTC, when the phone read the screen (dates a member stat and files a
+ *  donation reading on its game day; VS days ignore it). */
+data class ScanEntry(val name: String, val score: Long, val category: String, val capturedAt: String? = null)
 
 data class PreviewRequest(val weekDate: String, val entries: List<ScanEntry>)
 
@@ -12,7 +14,8 @@ data class CommitRecord(
     val memberId: Int,
     val originalName: String,
     val category: String,
-    val score: Long
+    val score: Long,
+    val capturedAt: String? = null
 )
 
 data class AliasMapping(
@@ -74,7 +77,9 @@ data class PreviewMatch(
     val matchedMember: MemberSummary?,
     val matchType: String,
     val category: String,
-    val score: Long
+    val score: Long,
+    /** Echoed by the server from the preview request, so the commit record can carry it. */
+    val capturedAt: String? = null
 )
 
 data class PreviewResponse(
@@ -93,7 +98,10 @@ data class CommitResponse(
     val powerRecordsSaved: Int,
     val killsRecordsSaved: Int,
     val aliasesSaved: Int,
-    val errors: List<String>
+    val errors: List<String>,
+    /** Per category: rows written, and readings equal to what was stored (empty when absent). */
+    val recordsSaved: Map<String, Int> = emptyMap(),
+    val recordsUnchanged: Map<String, Int> = emptyMap()
 )
 
 // ── Category constants ────────────────────────────────────────────────────────
@@ -102,6 +110,8 @@ object Category {
     val VS_DAYS = listOf("monday", "tuesday", "wednesday", "thursday", "friday", "saturday")
     const val POWER = "power"
     const val KILLS = "kills"
+    const val DONATION_DAILY = "donation_daily"
+    const val DONATION_WEEKLY = "donation_weekly"
 }
 
 // ── Day name mapping ──────────────────────────────────────────────────────────
@@ -119,16 +129,20 @@ object DayMapping {
         "Fri"   to "friday",
         "Sat"   to "saturday",
         "Power" to "power",
-        "Kills" to "kills"
+        "Kills" to "kills",
+        "donation_daily" to "donation_daily",
+        "donation_weekly" to "donation_weekly"
     )
+
+    /** The one spinner entry that sends both Donation tabs, every game day, in one sync. */
+    const val DONATIONS = "Donations"
 
     /** Categories stored locally that have no mobile API commit path. Includes both
      *  current YAML-style keys and legacy display-name keys for backwards compatibility. */
     val skipped: Set<String> = setOf(
-        // Legacy keys
+        // Legacy key: a scan from before the two tabs were told apart cannot say which it is.
         "Donation",
         // Current YAML category keys
-        "donation_daily", "donation_weekly",
         "weekly",
         "mutual_assistance_daily", "mutual_assistance_weekly", "mutual_assistance_season",
         "siege_daily", "siege_weekly", "siege_season",
@@ -137,5 +151,5 @@ object DayMapping {
     )
 
     /** Ordered list of display names shown in the day selector spinner. */
-    val syncableDisplayNames: List<String> = listOf("Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Power", "Kills")
+    val syncableDisplayNames: List<String> = listOf("Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Power", "Kills", DONATIONS)
 }

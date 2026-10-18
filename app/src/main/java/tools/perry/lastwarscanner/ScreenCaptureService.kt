@@ -30,6 +30,7 @@ import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.*
 import tools.perry.lastwarscanner.image.ImageUtils
 import tools.perry.lastwarscanner.model.AppDatabase
+import tools.perry.lastwarscanner.model.DonationRows
 import tools.perry.lastwarscanner.model.PlayerScoreEntity
 import tools.perry.lastwarscanner.network.RosterCache
 import tools.perry.lastwarscanner.ocr.OcrParser
@@ -425,7 +426,27 @@ class ScreenCaptureService : Service() {
 
                                     Log.d(TAG, "player: ocr=\"${resolvedPlayer.name}\" → final=\"$finalName\" score=$scoreLong latestName=\"${latest?.name}\" latestScore=${latest?.score}")
 
-                                    if (latest == null || latest.score != scoreLong) {
+                                    if (DonationRows.isDonation(activeDay)) {
+                                        // A donation is a resetting counter: keyed on (name, category,
+                                        // game day), never on the member's latest row across categories,
+                                        // and an unchanged reading advances its time (DonationRows).
+                                        val now = System.currentTimeMillis()
+                                        val prior = db.playerScoreDao().getLatestEntryForDay(finalName, activeDay)
+                                        when (DonationRows.storeAction(prior, scoreLong, now)) {
+                                            DonationRows.Store.INSERT -> {
+                                                Log.d(TAG, "  → INSERT donation name=\"$finalName\" score=$scoreLong day=$activeDay")
+                                                db.playerScoreDao().insert(PlayerScoreEntity(
+                                                    name = finalName,
+                                                    score = scoreLong,
+                                                    day = activeDay,
+                                                    timestamp = now,
+                                                    rowSnapshotPath = snapshotPath
+                                                ))
+                                            }
+                                            DonationRows.Store.TOUCH ->
+                                                db.playerScoreDao().touch(prior!!.id, now, snapshotPath)
+                                        }
+                                    } else if (latest == null || latest.score != scoreLong) {
                                         Log.d(TAG, "  → INSERT name=\"$finalName\" score=$scoreLong day=$activeDay")
                                         db.playerScoreDao().insert(PlayerScoreEntity(
                                             name = finalName,

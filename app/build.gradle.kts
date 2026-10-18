@@ -44,6 +44,9 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
     testImplementation(libs.junit)
+    // The real org.json for JVM unit tests: android.jar's stubs return defaults
+    // (isReturnDefaultValues), which would let a JSON test pass on empty objects.
+    testImplementation(libs.org.json)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     

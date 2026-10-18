@@ -33,6 +33,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default also asks for the SDK's legacy `tools` package, which the
+          # runner's sdkmanager no longer offers ("Failed to find package 'tools'").
+          packages: 'platform-tools'
 
       - name: Install compile SDK platform
         # compileSdk = 36 (app/build.gradle.kts). Build-tools are resolved by AGP.
@@ -44,8 +48,8 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Unit tests and debug APK
+        run: ./gradlew test assembleDebug --stacktrace
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

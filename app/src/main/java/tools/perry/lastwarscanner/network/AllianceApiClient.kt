@@ -56,20 +56,7 @@ class AllianceApiClient(private val session: SessionManager) {
     suspend fun preview(request: PreviewRequest): Result<PreviewResponse> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val entriesArr = JSONArray().apply {
-                    request.entries.forEach { e ->
-                        put(JSONObject().apply {
-                            put("name", e.name)
-                            put("score", e.score)
-                            put("category", e.category)
-                        })
-                    }
-                }
-                val body = JSONObject().apply {
-                    put("week_date", request.weekDate)
-                    put("entries", entriesArr)
-                }.toString()
-                val json = postJson(endpoint("/api/mobile/preview"), body, session.getToken())
+                val json = postJson(endpoint("/api/mobile/preview"), previewBody(request), session.getToken())
                 parsePreviewResponse(json)
             }
         }
@@ -77,83 +64,12 @@ class AllianceApiClient(private val session: SessionManager) {
     suspend fun commit(request: CommitRequest): Result<CommitResponse> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val recordsArr = JSONArray().apply {
-                    request.records.forEach { r ->
-                        put(JSONObject().apply {
-                            put("member_id", r.memberId)
-                            put("original_name", r.originalName)
-                            put("category", r.category)
-                            put("score", r.score)
-                        })
-                    }
-                }
-                val aliasesArr = JSONArray().apply {
-                    request.saveAliases.forEach { a ->
-                        put(JSONObject().apply {
-                            put("failed_alias", a.failedAlias)
-                            put("member_id", a.memberId)
-                            put("category", a.category)
-                        })
-                    }
-                }
-                val body = JSONObject().apply {
-                    put("week_date", request.weekDate)
-                    put("records", recordsArr)
-                    put("save_aliases", aliasesArr)
-                }.toString()
-                val json = postJson(endpoint("/api/mobile/commit"), body, session.getToken())
-                val errArr = json.optJSONArray("errors") ?: JSONArray()
-                CommitResponse(
-                    message = json.optString("message", ""),
-                    vsRecordsSaved = json.optInt("vs_records_saved", 0),
-                    powerRecordsSaved = json.optInt("power_records_saved", 0),
-                    killsRecordsSaved = json.optInt("kill_records_saved", 0),
-                    aliasesSaved = json.optInt("aliases_saved", 0),
-                    errors = List(errArr.length()) { i -> errArr.getString(i) }
-                )
+                parseCommitResponse(postJson(endpoint("/api/mobile/commit"), commitBody(request), session.getToken()))
             }
         }
 
     // ── JSON parsing helpers ──────────────────────────────────────────────────
 
-    private fun parseMember(obj: JSONObject): MemberSummary {
-        val aliasesArr = obj.optJSONArray("aliases") ?: JSONArray()
-        val aliases = List(aliasesArr.length()) { i ->
-            val a = aliasesArr.getJSONObject(i)
-            AliasEntry(alias = a.getString("alias"), category = a.optString("category", ""))
-        }
-        return MemberSummary(
-            id = obj.getInt("id"),
-            name = obj.getString("name"),
-            rank = obj.optString("rank", ""),
-            aliases = aliases
-        )
-    }
-
-    private fun parsePreviewResponse(json: JSONObject): PreviewResponse {
-        fun parseMatch(obj: JSONObject): PreviewMatch {
-            val memberObj = if (!obj.isNull("matched_member")) obj.optJSONObject("matched_member") else null
-            return PreviewMatch(
-                originalName = obj.getString("original_name"),
-                matchedMember = memberObj?.let { parseMember(it) },
-                matchType = obj.optString("match_type", ""),
-                category = obj.getString("category"),
-                score = obj.getLong("score")
-            )
-        }
-
-        fun parseMatchList(arr: JSONArray) = List(arr.length()) { i -> parseMatch(arr.getJSONObject(i)) }
-        fun parseMemberList(arr: JSONArray) = List(arr.length()) { i -> parseMember(arr.getJSONObject(i)) }
-
-        return PreviewResponse(
-            matched = parseMatchList(json.optJSONArray("matched") ?: JSONArray()),
-            unresolved = parseMatchList(json.optJSONArray("unresolved") ?: JSONArray()),
-            allMembers = parseMemberList(json.optJSONArray("all_members") ?: JSONArray()),
-            totalSubmitted = json.optInt("total_submitted", 0),
-            totalMatched = json.optInt("total_matched", 0),
-            totalUnresolved = json.optInt("total_unresolved", 0)
-        )
-    }
 
     // ── HTTP primitives ───────────────────────────────────────────────────────
 
@@ -190,11 +106,7 @@ class AllianceApiClient(private val session: SessionManager) {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.readText() ?: "{}"
-            if (code !in 200..299) {
-                val err = runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
-                val msg = err.optString("message", "HTTP $code")
-                throw HttpException(code, msg)
-            }
+            if (code !in 200..299) throw HttpException(code, errorMessage(code, raw))
             return JSONObject(raw)
         } finally {
             conn.disconnect()
@@ -206,20 +118,127 @@ class AllianceApiClient(private val session: SessionManager) {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.readText() ?: "[]"
-            if (code !in 200..299) {
-                val err = runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
-                val msg = err.optString("message", "HTTP $code")
-                throw HttpException(code, msg)
-            }
+            if (code !in 200..299) throw HttpException(code, errorMessage(code, raw))
             return JSONArray(raw)
         } finally {
             conn.disconnect()
         }
     }
 
-    class HttpException(val code: Int, message: String) : Exception("HTTP $code: $message")
+    /** [serverMessage] is the server's own sentence (its JSON `message`, or its plain-text body). */
+    class HttpException(val code: Int, val serverMessage: String) : Exception("HTTP $code: $serverMessage")
 
     companion object {
+        /** The server's words for a failure: a JSON `message`, else its plain-text body, capped. */
+        fun errorMessage(code: Int, raw: String): String {
+            val fromJson = runCatching { JSONObject(raw).optString("message", "") }.getOrDefault("")
+            val text = fromJson.ifBlank { raw.trim() }
+            return if (text.isBlank()) "HTTP $code" else text.take(300)
+        }
+
+        fun previewBody(request: PreviewRequest): String {
+            val entriesArr = JSONArray().apply {
+                request.entries.forEach { e ->
+                    put(JSONObject().apply {
+                        put("name", e.name)
+                        put("score", e.score)
+                        put("category", e.category)
+                        e.capturedAt?.let { put("captured_at", it) }
+                    })
+                }
+            }
+            return JSONObject().apply {
+                put("week_date", request.weekDate)
+                put("entries", entriesArr)
+            }.toString()
+        }
+
+        fun commitBody(request: CommitRequest): String {
+            val recordsArr = JSONArray().apply {
+                request.records.forEach { r ->
+                    put(JSONObject().apply {
+                        put("member_id", r.memberId)
+                        put("original_name", r.originalName)
+                        put("category", r.category)
+                        put("score", r.score)
+                        r.capturedAt?.let { put("captured_at", it) }
+                    })
+                }
+            }
+            val aliasesArr = JSONArray().apply {
+                request.saveAliases.forEach { a ->
+                    put(JSONObject().apply {
+                        put("failed_alias", a.failedAlias)
+                        put("member_id", a.memberId)
+                        put("category", a.category)
+                    })
+                }
+            }
+            return JSONObject().apply {
+                put("week_date", request.weekDate)
+                put("records", recordsArr)
+                put("save_aliases", aliasesArr)
+            }.toString()
+        }
+
+        fun parseMember(obj: JSONObject): MemberSummary {
+            val aliasesArr = obj.optJSONArray("aliases") ?: JSONArray()
+            val aliases = List(aliasesArr.length()) { i ->
+                val a = aliasesArr.getJSONObject(i)
+                AliasEntry(alias = a.getString("alias"), category = a.optString("category", ""))
+            }
+            return MemberSummary(
+                id = obj.getInt("id"),
+                name = obj.getString("name"),
+                rank = obj.optString("rank", ""),
+                aliases = aliases
+            )
+        }
+
+        fun parsePreviewResponse(json: JSONObject): PreviewResponse {
+            fun parseMatch(obj: JSONObject): PreviewMatch {
+                val memberObj = if (!obj.isNull("matched_member")) obj.optJSONObject("matched_member") else null
+                return PreviewMatch(
+                    originalName = obj.getString("original_name"),
+                    matchedMember = memberObj?.let { parseMember(it) },
+                    matchType = obj.optString("match_type", ""),
+                    category = obj.getString("category"),
+                    score = obj.getLong("score"),
+                    capturedAt = if (obj.isNull("captured_at")) null else obj.optString("captured_at").ifBlank { null }
+                )
+            }
+
+            fun parseMatchList(arr: JSONArray) = List(arr.length()) { i -> parseMatch(arr.getJSONObject(i)) }
+            fun parseMemberList(arr: JSONArray) = List(arr.length()) { i -> parseMember(arr.getJSONObject(i)) }
+
+            return PreviewResponse(
+                matched = parseMatchList(json.optJSONArray("matched") ?: JSONArray()),
+                unresolved = parseMatchList(json.optJSONArray("unresolved") ?: JSONArray()),
+                allMembers = parseMemberList(json.optJSONArray("all_members") ?: JSONArray()),
+                totalSubmitted = json.optInt("total_submitted", 0),
+                totalMatched = json.optInt("total_matched", 0),
+                totalUnresolved = json.optInt("total_unresolved", 0)
+            )
+        }
+
+        fun parseCommitResponse(json: JSONObject): CommitResponse {
+            val errArr = json.optJSONArray("errors") ?: JSONArray()
+            fun counts(key: String): Map<String, Int> {
+                val obj = json.optJSONObject(key) ?: return emptyMap()
+                return obj.keys().asSequence().associateWith { obj.optInt(it, 0) }
+            }
+            return CommitResponse(
+                message = json.optString("message", ""),
+                vsRecordsSaved = json.optInt("vs_records_saved", 0),
+                powerRecordsSaved = json.optInt("power_records_saved", 0),
+                killsRecordsSaved = json.optInt("kill_records_saved", 0),
+                aliasesSaved = json.optInt("aliases_saved", 0),
+                errors = List(errArr.length()) { i -> errArr.getString(i) },
+                recordsSaved = counts("records_saved"),
+                recordsUnchanged = counts("records_unchanged")
+            )
+        }
+
         /**
          * Parses the server's `expires_at` value, which may be either:
          *  - An ISO 8601 string: `"2026-04-14T03:39:19Z"`
