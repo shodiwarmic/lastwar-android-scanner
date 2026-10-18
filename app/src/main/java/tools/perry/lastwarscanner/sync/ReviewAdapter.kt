@@ -63,12 +63,15 @@ class ReviewAdapter(
 
     /** Called from the host activity when the user selects a member in the picker dialog. */
     fun updateResolution(originalName: String, member: MemberSummary) {
-        val idx = items.indexOfFirst { it is Item.Unresolved && it.match.originalName == originalName }
-        if (idx < 0) return
-        val item = items[idx] as Item.Unresolved
-        item.selectedMemberId = member.id
-        item.selectedMemberName = member.name
-        notifyItemChanged(idx)
+        // A name can be listed more than once (a donation reading per tab and game day): the
+        // choice applies to every row of it, as the commit does.
+        items.forEachIndexed { idx, it ->
+            if (it is Item.Unresolved && it.match.originalName == originalName) {
+                it.selectedMemberId = member.id
+                it.selectedMemberName = member.name
+                notifyItemChanged(idx)
+            }
+        }
     }
 
     /**

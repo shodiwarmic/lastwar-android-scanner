@@ -17,6 +17,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.launch
 import tools.perry.lastwarscanner.R
+import tools.perry.lastwarscanner.network.Category
 import tools.perry.lastwarscanner.network.DayMapping
 import tools.perry.lastwarscanner.network.MemberSummary
 
@@ -117,7 +118,9 @@ class SyncActivity : AppCompatActivity() {
         }
         val lastDay = getSharedPreferences(SYNC_PREFS, MODE_PRIVATE)
             .getString(KEY_LAST_ACTIVE_DAY, days.first()) ?: days.first()
-        val initialIdx = days.indexOf(lastDay).coerceAtLeast(0)
+        // The last scanned category; a Donation tab pre-selects the one Donations entry.
+        val lastEntry = if (lastDay.startsWith("donation")) DayMapping.DONATIONS else lastDay
+        val initialIdx = days.indexOf(lastEntry).coerceAtLeast(0)
         spinnerDay.setSelection(initialIdx)
 
         // Week date label
@@ -297,6 +300,15 @@ class SyncActivity : AppCompatActivity() {
         sb.append(getString(R.string.sync_result_kills, response.killsRecordsSaved))
         sb.append("\n")
         sb.append(getString(R.string.sync_result_aliases, response.aliasesSaved))
+        val daily = response.recordsSaved[Category.DONATION_DAILY]
+        val weekly = response.recordsSaved[Category.DONATION_WEEKLY]
+        if (daily != null || weekly != null) {
+            sb.append("\n")
+            sb.append(getString(R.string.sync_result_donations, daily ?: 0, weekly ?: 0))
+            val unchanged = (response.recordsUnchanged[Category.DONATION_DAILY] ?: 0) +
+                (response.recordsUnchanged[Category.DONATION_WEEKLY] ?: 0)
+            if (unchanged > 0) sb.append(getString(R.string.sync_result_donations_unchanged, unchanged))
+        }
         if (response.errors.isNotEmpty()) {
             sb.append("\n\n")
             sb.append(getString(R.string.sync_result_partial_errors, response.errors.size))

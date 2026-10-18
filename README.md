@@ -12,7 +12,7 @@ Last War Scanner is an Android utility designed to automate the collection of al
     - **Strength Rankings**: Specifically handles Power, Kills, and Donation categories.
 - **Rhythmic Scanning with Visual Feedback**: A high-contrast magenta bar flashes at the top of the screen whenever a snapshot is taken, signaling when it's safe to scroll to the next page.
 - **Smart Name Resolution**: Resolves scanned names against your alliance roster and merges OCR variants (e.g. "gustavooo" vs "gustovooo") into a single consistent record.
-- **Sync to the Web**: Upload scanned VS, Power, and Kills scores straight to your alliance-manager site, pairing OCR names to roster members on-device.
+- **Sync to the Web**: Upload scanned VS, Power, Kills and Donation scores straight to your alliance-manager site, pairing OCR names to roster members on-device. Donations sync both tabs at once (**Donations** in the day picker), each reading with the time it was scanned, so the site can work out each day's donation; it needs alliance-manager v3.2.0 or later (an older site lists the donation rows as not accepted). Donations below 1,000 points are not read on the phone yet.
 - **Data Management**:
     - **Live Pivot Table**: View all member scores across all days and categories in a single consolidated view.
     - **Interactive Sorting**: Sort members by name or by specific day/category scores.

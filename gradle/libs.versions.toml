@@ -14,6 +14,7 @@ kotlin = "2.1.0"
 ksp = "2.3.2"
 securityCrypto = "1.1.0"
 snakeyaml = "2.6"
+orgJson = "20260814"
 textRecognitionKorean = "16.0.1"
 
 [libraries]
@@ -31,6 +32,7 @@ androidx-room-compiler = { group = "androidx.room", name = "room-compiler", vers
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-lifecycle-viewmodel-ktx = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-ktx", version.ref = "lifecycle" }
 snakeyaml = { module = "org.yaml:snakeyaml", version.ref = "snakeyaml" }
+org-json = { module = "org.json:json", version.ref = "orgJson" }
 text-recognition = { module = "com.google.mlkit:text-recognition", version.ref = "textRecognitionKorean" }
 text-recognition-chinese = { module = "com.google.mlkit:text-recognition-chinese", version.ref = "textRecognitionKorean" }
 text-recognition-devanagari = { module = "com.google.mlkit:text-recognition-devanagari", version.ref = "textRecognitionKorean" }

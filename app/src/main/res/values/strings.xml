@@ -56,7 +56,9 @@
     <string name="sync_log_out">Log Out</string>
     <string name="sync_label_day">Select day to sync:</string>
     <string name="sync_week_of">Week of %1$s</string>
-    <string name="sync_skipped_note">Power and Kills scores will sync. %1$s are not yet supported via mobile sync.</string>
+    <string name="sync_skipped_note">VS days, Power, Kills and Donations will sync. %1$s are not yet supported via mobile sync.</string>
+    <string name="sync_result_donations">Donation readings saved: %1$d daily, %2$d weekly</string>
+    <string name="sync_result_donations_unchanged"> (%1$d unchanged)</string>
     <string name="btn_start_sync">Start Sync</string>
     <string name="sync_loading_preview">Checking scores\u2026</string>
     <string name="sync_loading_commit">Submitting\u2026</string>
